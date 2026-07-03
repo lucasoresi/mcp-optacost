@@ -1,0 +1,33 @@
+{
+  "name": "mcp-postgres-readonly",
+  "version": "2.0.0",
+  "description": "Servidor MCP remoto (Streamable HTTP) de solo lectura y multiusuario sobre PostgreSQL, con login OAuth por usuario/contraseña de la base. Consumible desde Claude Desktop, ChatGPT, Cursor y cualquier cliente MCP.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "mcp-postgres-readonly": "dist/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
