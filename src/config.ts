@@ -48,13 +48,14 @@ export interface AppConfig {
   bootstrapUser: string | null;
   bootstrapPassword: string | null;
 
-  // search_path para sesiones OAuth (SET ROLE no aplica el search_path del
-  // rol destino). {user} se reemplaza por el nombre del usuario.
-  userSchemaTemplate: string;
-
   // Límites de seguridad
   statementTimeoutMs: number;
   maxRows: number;
+
+  // Auditoría de privilegios (mcpYt): baja de fatal a warning el chequeo de
+  // permisos de escritura del rol. El resto de los chequeos (superuser,
+  // BYPASSRLS, extensiones de escape) nunca se pueden anular.
+  allowWritableRole: boolean;
 
   // Servidor / OAuth
   publicUrl: string; // URL pública base (issuer y resource). Ej: https://mcp.midominio.com
@@ -79,9 +80,9 @@ export function loadConfig(): AppConfig {
     sslMode,
     bootstrapUser: process.env.BOOTSTRAP_DB_USER?.trim() || null,
     bootstrapPassword: process.env.BOOTSTRAP_DB_PASSWORD?.trim() || null,
-    userSchemaTemplate: process.env.USER_SCHEMA_TEMPLATE?.trim() || "{user}",
     statementTimeoutMs: int("STATEMENT_TIMEOUT_MS", 8000),
     maxRows: int("MAX_ROWS", 1000),
+    allowWritableRole: bool("ALLOW_WRITABLE_ROLE", false),
     publicUrl,
     port: int("PORT", 3000),
     allowedOrigins: list("ALLOWED_ORIGINS", ["https://claude.ai", "https://chatgpt.com"]),
