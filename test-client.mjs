@@ -24,17 +24,21 @@ try {
   const tools = await client.listTools();
   console.log("Tools disponibles:", tools.tools.map((t) => t.name).join(", "), "\n");
 
-  console.log("── list_schemas ──");
-  const schemas = await client.callTool({ name: "list_schemas", arguments: {} });
-  console.log(schemas.content?.[0]?.text ?? JSON.stringify(schemas), "\n");
-
   console.log("── list_tables ──");
   const tablesRes = await client.callTool({ name: "list_tables", arguments: {} });
   console.log(tablesRes.content?.[0]?.text ?? JSON.stringify(tablesRes), "\n");
 
-  console.log("── execute_sql: SELECT count(*) FROM jobs ──");
+  console.log("── list_relationships ──");
+  const rels = await client.callTool({ name: "list_relationships", arguments: {} });
+  console.log(rels.content?.[0]?.text ?? JSON.stringify(rels), "\n");
+
+  console.log("── get_database_info ──");
+  const info = await client.callTool({ name: "get_database_info", arguments: {} });
+  console.log(info.content?.[0]?.text ?? JSON.stringify(info), "\n");
+
+  console.log("── query: SELECT count(*) FROM jobs ──");
   const q = await client.callTool({
-    name: "execute_sql",
+    name: "query",
     arguments: { sql: "SELECT count(*) AS total FROM jobs" },
   });
   console.log(q.content?.[0]?.text ?? JSON.stringify(q));
