@@ -45,6 +45,15 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// ── Logging temporal de debug ───────────────────────────────────────
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const start = Date.now();
+  res.on("finish", () => {
+    console.log(`[req] ${req.method} ${req.path} -> ${res.statusCode} (${Date.now() - start}ms)`);
+  });
+  next();
+});
+
 app.get("/healthz", (_req, res) => res.json({ status: "ok" }));
 
 // OAuth (metadata, register, authorize, token). Devuelve resolveToken().
