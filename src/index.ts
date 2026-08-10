@@ -16,13 +16,17 @@ import { randomUUID } from "node:crypto";
 import express, { type Request, type Response, type NextFunction } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { AuditFailure, formatAuditFailure } from "./audit.js";
 import { loadConfig } from "./config.js";
-import { Database, type Identity } from "./db.js";
-import { createMcpServer } from "./tools.js";
+import type { Identity } from "./identity.js";
+import { IdentityContextCache } from "./identity-context.js";
 import { mountOAuth } from "./oauth.js";
+import { PoolRegistry } from "./pool.js";
+import { createMcpServer } from "./tools.js";
 
 const cfg = loadConfig();
-const db = new Database(cfg);
+const pools = new PoolRegistry(cfg);
+const identityContexts = new IdentityContextCache(pools, cfg);
 
 const app = express();
 app.use(express.json({ limit: "4mb" }));
@@ -57,7 +61,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.get("/healthz", (_req, res) => res.json({ status: "ok" }));
 
 // OAuth (metadata, register, authorize, token). Devuelve resolveToken().
-const oauth = mountOAuth(app, db, cfg);
+const oauth = mountOAuth(app, pools, identityContexts, cfg);
 
 // ── Resolución de identidad para /mcp ───────────────────────────────
 type AuthResult =
@@ -120,12 +124,23 @@ app.post("/mcp", async (req: Request, res: Response) => {
     if (sessionId && transports.has(sessionId)) {
       transport = transports.get(sessionId)!;
     } else if (!sessionId && isInitializeRequest(req.body)) {
-      // Para Basic Auth validamos las credenciales al iniciar la sesión.
-      if (auth.identity.mode === "direct") {
-        const err = await db.validateCredentials(auth.identity.username, auth.identity.password);
-        if (err) {
-          return send401(res, { ok: false, status: 401, message: `No se pudo conectar a la base como "${auth.identity.username}": ${err}` });
+      // Arma (o reutiliza del cache) el contexto de esta identidad: conecta,
+      // audita sus privilegios y resuelve su schema. Reemplaza el chequeo
+      // de credenciales que hacía antes sólo para Basic Auth — ahora corre
+      // para las dos modalidades, porque la auditoría también aplica a OAuth.
+      let context: Awaited<ReturnType<typeof identityContexts.get>>;
+      try {
+        context = await identityContexts.get(auth.identity);
+      } catch (err) {
+        if (err instanceof AuditFailure) {
+          return send401(res, { ok: false, status: 401, message: formatAuditFailure(err) });
         }
+        const detail = err instanceof Error ? err.message : String(err);
+        return send401(res, {
+          ok: false,
+          status: 401,
+          message: `No se pudo conectar a la base como "${auth.identity.username}": ${detail}`,
+        });
       }
 
       transport = new StreamableHTTPServerTransport({
@@ -138,7 +153,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
         if (transport.sessionId) transports.delete(transport.sessionId);
       };
 
-      const server = createMcpServer(db, cfg, auth.identity);
+      const server = createMcpServer(context);
       await server.connect(transport);
     } else {
       res.status(400).json({
@@ -180,7 +195,7 @@ app.delete("/mcp", handleSessionRequest);
 async function main() {
   if (cfg.bootstrapUser) {
     try {
-      await db.pingBootstrap();
+      await pools.pingBootstrap();
       console.log("[db] Rol bootstrap verificado (para sesiones OAuth).");
     } catch (e) {
       console.error("[db] No se pudo conectar con el rol bootstrap:", e);
@@ -200,7 +215,7 @@ async function main() {
     console.log("\nCerrando...");
     httpServer.close();
     for (const t of transports.values()) await t.close().catch(() => {});
-    await db.close().catch(() => {});
+    await pools.closeAll().catch(() => {});
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
