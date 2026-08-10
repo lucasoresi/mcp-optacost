@@ -14,7 +14,7 @@
 - Every file ported from mcpYt uses **`.js` import extensions**, never `.ts` — `mcp/`'s `tsconfig.json` is `module: NodeNext` / `moduleResolution: NodeNext` and compiles via `tsc` to `dist/`, unlike mcpYt's `bundler`/`tsx`-only setup. This is the one mechanical change applied to every ported file.
 - **Do not add** the `-c default_transaction_read_only=on` Postgres startup option to any pool. `mcp/`'s existing pool config deliberately avoids the `options` startup parameter because Supabase's connection pooler (Supavisor, in use per `PGHOST=aws-0-us-west-1.pooler.supabase.com`) can reject or ignore it. The explicit `BEGIN TRANSACTION READ ONLY` per query is the real, already-proven enforcement (mcpYt's own integration test exists specifically to confirm this layer works alone).
 - **No `PG_SCHEMA`-style global override.** Schema is always auto-detected per user from their Postgres `GRANT`s (`resolveSchema()`). If a role can see zero or more than one non-system schema, `resolveSchema()` throws — surfaced as an audit failure (401 for Basic Auth, re-shown login form for OAuth). This is intentional per the approved design spec, not a gap to fill in.
-- **Tool-facing text is never translated.** Every string mcpYt sends to the model (tool titles, descriptions, guard rejection reasons, audit check names/details) stays in English, exactly as written in `mcpYt/src/**`. This was an explicit requirement during design ("mismos nombres, descriptions, lógica").
+- **Tool-facing text is never translated — with one deliberate, confirmed exception.** Every string the 5 non-audit tools and `guard.ts` send to the model (titles, descriptions, guard rejection reasons) stays in English, exactly as written in `mcpYt/src/**`. This was an explicit requirement during design ("mismos nombres, descriptions, lógica"). The exception is `audit.ts` (Task 6): its privilege-check names/details, the `AuditFailure` message, and `resolveSchema`'s error messages are translated to Spanish — confirmed explicitly during plan setup, after being shown that this makes `get_database_info`'s output mixed-language (its own fixed English labels in `tools/database-info.ts`, Spanish check text from `audit.ts`). This is accepted, not a defect a reviewer should flag.
 - **New glue code follows `mcp/`'s existing Spanish convention** for operator/developer-facing strings (matches `CLAUDE.md`: "Comments and identifiers in `db.ts`/`oauth.ts`/`config.ts` are in Spanish") — this applies to the new `pool.ts`, `identity.ts`, `identity-context.ts`, and the modified sections of `index.ts`/`oauth.ts`/`config.ts`.
 - **Only successful audits are cached.** A failed audit is never cached — the next connection attempt from that username re-runs it. This lets a user who just fixed a Postgres `GRANT` succeed on their very next try, without a server restart. Successful audits are cached forever (until process restart) — this is an accepted, documented limitation from the design spec, not something to add a TTL for.
 - Source references used throughout this plan: `/mnt/c/Users/lucas/Desktop/mcpYt/src/**` (source of the ported logic) and `/mnt/c/Users/lucas/Desktop/mcp/src/**` (integration target, branch `feat/mcpyt-integration`).
@@ -565,7 +565,9 @@ git commit -m "docs: document ALLOW_WRITABLE_ROLE, drop USER_SCHEMA_TEMPLATE fro
 
 ---
 
-### Task 6: Port `audit.ts`
+### Task 6: Port `audit.ts` (checks translated to Spanish — deliberate exception to the no-translation rule)
+
+`audit.ts` is the one ported file with user-visible text NOT kept in English: its privilege-check names/details, the `AuditFailure` message, and `resolveSchema`'s error messages are all human/operator-facing (they either surface via `formatAuditFailure`/`summarizeAuditFailure` in the Basic Auth 401 / OAuth login page — both already Spanish per the Global Constraints — or via `get_database_info`, whose *own* fixed labels stay in English per Task 7). This makes `get_database_info`'s output mixed-language (English section headers, Spanish check text) — a deliberate, explicitly confirmed tradeoff, not a bug. `guard.ts` and the other 5 tools stay 100% English, unmodified from mcpYt. Because of this, the file is written out in full below rather than copied — it isn't a mechanical port.
 
 **Files:**
 - Create: `src/audit.ts`
@@ -573,27 +575,39 @@ git commit -m "docs: document ALLOW_WRITABLE_ROLE, drop USER_SCHEMA_TEMPLATE fro
 **Interfaces:**
 - Consumes: `Db` (`db.catalogQuery`) from Task 4.
 - Produces: `runAudit(db, config): Promise<AuditReport>`, `resolveSchema(report, config): string`, `remediationScript(schema): string`, `AuditFailure` class, `AuditReport`/`AuditCheck`/`Severity` types, `AuditConfig` type, `formatAuditFailure(error): string`, `summarizeAuditFailure(error): string` — consumed by `identity-context.ts` (Task 8), `tools/database-info.ts` (Task 7), `index.ts` (Task 10), `oauth.ts` (Task 11).
+- Check name substrings (used by tests in Task 12): `"superusuario"`, `"rol predefinido"`, `"escapar"`, `"privilegios de escritura"`.
 
-- [ ] **Step 1: Copy the file**
-
-```bash
-cp /mnt/c/Users/lucas/Desktop/mcpYt/src/audit.ts /mnt/c/Users/lucas/Desktop/mcp/src/audit.ts
-```
-
-- [ ] **Step 2: Replace the `Config` import with a local, minimal `AuditConfig`**
-
-Edit `src/audit.ts`. Change:
+- [ ] **Step 1: Create `src/audit.ts`**
 
 ```ts
-// old
-import type { Config } from './config.ts';
-import type { Db } from './db.ts';
-```
+/**
+ * Capa 1 del modelo de seguridad: una auditoría de privilegios que corre
+ * antes de registrar ninguna tool, para el rol conectado (o asumido vía
+ * SET LOCAL ROLE — ver db.ts).
+ *
+ * Los chequeos se dividen por una línea de principio:
+ *
+ *   FATAL, nunca anulable -- privilegios que dejan a una query escapar de la
+ *   transacción READ ONLY por completo (superuser, BYPASSRLS, roles de
+ *   servidor/archivos, dblink/postgres_fdw, lenguajes procedurales no
+ *   confiables).
+ *
+ *   FATAL salvo ALLOW_WRITABLE_ROLE -- privilegios que la transacción READ
+ *   ONLY sí bloquea genuinamente (grants de escritura, CREATE en un schema
+ *   o base, CREATEDB, CREATEROLE). Se rechazan por defecto igual, porque la
+ *   capa 1 no debería depender de la capa 3, pero es seguro anularlos
+ *   deliberadamente.
+ *
+ * Los privilegios se consultan con has_*_privilege() en vez de leer
+ * information_schema, porque esas funciones ya resuelven privilegios
+ * heredados por membresía de rol y por PUBLIC.
+ *
+ * Puerto de mcpYt (safe-postgres-mcp/src/audit.ts). Los nombres/detalles de
+ * los checks están traducidos al español (a diferencia del resto de los
+ * archivos portados): son texto operador-facing, no algo que el modelo deba
+ * interpretar en un formato fijo.
+ */
 
-to:
-
-```ts
-// new
 import type { Db } from "./db.js";
 
 /**
@@ -606,15 +620,321 @@ export interface AuditConfig {
   /** Ya no es una variable de entorno global multi-tenant: siempre null en producción. */
   schemaOverride: string | null;
 }
-```
 
-Then replace every remaining `config: Config` parameter type in the file with `config: AuditConfig` — there are two: `runAudit(db: Db, config: Config)` and `resolveSchema(report: AuditReport, config: Config)`. Every other line (the checks themselves, `AuditFailure`, `remediationScript`, all the SQL) stays exactly as copied.
+export type Severity = "fatal" | "warning" | "info";
 
-- [ ] **Step 3: Add the failure-formatting helpers**
+export interface AuditCheck {
+  name: string;
+  passed: boolean;
+  severity: Severity;
+  detail: string;
+}
 
-mcpYt keeps this formatting in its single-tenant `index.ts`; `mcp/` needs it from two call sites (`index.ts` for Basic Auth 401s, `oauth.ts` for the OAuth login form), so it belongs in `audit.ts` itself. Append to the end of `src/audit.ts`:
+export interface AuditReport {
+  role: string;
+  database: string;
+  serverVersion: string;
+  /** Schemas no-sistema a los que el rol puede acceder, en orden alfabético. */
+  schemas: string[];
+  checks: AuditCheck[];
+}
 
-```ts
+export class AuditFailure extends Error {
+  constructor(
+    message: string,
+    readonly failures: AuditCheck[],
+    readonly report: AuditReport | null,
+  ) {
+    super(message);
+    this.name = "AuditFailure";
+  }
+}
+
+const ESCAPE_EXTENSIONS = [
+  "dblink",
+  "postgres_fdw",
+  "file_fdw",
+  "plpythonu",
+  "plpython3u",
+  "plperlu",
+  "pltclu",
+  "plr",
+];
+
+const PRIVILEGED_PREDEFINED_ROLES = [
+  "pg_execute_server_program",
+  "pg_write_server_files",
+  "pg_read_server_files",
+];
+
+interface IdentityRow {
+  role: string;
+  database: string;
+  server_version: string;
+}
+
+interface RoleAttributeRow {
+  rolname: string;
+  attributes: string[];
+}
+
+interface SchemaRow {
+  nspname: string;
+  can_create: boolean;
+}
+
+interface WritableTableRow {
+  nspname: string;
+  relname: string;
+  privileges: string[];
+}
+
+export async function runAudit(db: Db, config: AuditConfig): Promise<AuditReport> {
+  const [identity] = await db.catalogQuery<IdentityRow>(
+    `SELECT current_user AS role,
+            current_database() AS database,
+            current_setting('server_version') AS server_version`,
+  );
+
+  if (!identity) {
+    throw new AuditFailure("La base no devolvió una identidad de sesión.", [], null);
+  }
+
+  const roleAttributes = await db.catalogQuery<RoleAttributeRow>(
+    `SELECT r.rolname,
+            array_remove(ARRAY[
+              CASE WHEN r.rolsuper       THEN 'SUPERUSER'   END,
+              CASE WHEN r.rolbypassrls   THEN 'BYPASSRLS'   END,
+              CASE WHEN r.rolreplication THEN 'REPLICATION' END,
+              CASE WHEN r.rolcreatedb    THEN 'CREATEDB'    END,
+              CASE WHEN r.rolcreaterole  THEN 'CREATEROLE'  END
+            ], NULL) AS attributes
+       FROM pg_roles r
+      WHERE pg_has_role(current_user, r.oid, 'MEMBER')
+        AND (r.rolsuper OR r.rolbypassrls OR r.rolreplication OR r.rolcreatedb OR r.rolcreaterole)
+      ORDER BY r.rolname`,
+  );
+
+  const predefinedRoles = await db.catalogQuery<{ rolname: string }>(
+    `SELECT rolname
+       FROM pg_roles
+      WHERE rolname = ANY($1::text[])
+        AND pg_has_role(current_user, oid, 'MEMBER')
+      ORDER BY rolname`,
+    [PRIVILEGED_PREDEFINED_ROLES],
+  );
+
+  const schemaRows = await db.catalogQuery<SchemaRow>(
+    `SELECT n.nspname,
+            has_schema_privilege(n.oid, 'CREATE') AS can_create
+       FROM pg_namespace n
+      WHERE has_schema_privilege(n.oid, 'USAGE')
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND n.nspname NOT LIKE 'pg\\_%'
+      ORDER BY n.nspname`,
+  );
+
+  const writableTables = await db.catalogQuery<WritableTableRow>(
+    `SELECT n.nspname,
+            c.relname,
+            array_remove(ARRAY[
+              CASE WHEN has_table_privilege(c.oid, 'INSERT')   THEN 'INSERT'   END,
+              CASE WHEN has_table_privilege(c.oid, 'UPDATE')   THEN 'UPDATE'   END,
+              CASE WHEN has_table_privilege(c.oid, 'DELETE')   THEN 'DELETE'   END,
+              CASE WHEN has_table_privilege(c.oid, 'TRUNCATE') THEN 'TRUNCATE' END
+            ], NULL) AS privileges
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND n.nspname NOT LIKE 'pg\\_%'
+        AND has_schema_privilege(n.oid, 'USAGE')
+        AND (has_table_privilege(c.oid, 'INSERT')
+          OR has_table_privilege(c.oid, 'UPDATE')
+          OR has_table_privilege(c.oid, 'DELETE')
+          OR has_table_privilege(c.oid, 'TRUNCATE'))
+      ORDER BY n.nspname, c.relname
+      LIMIT 20`,
+  );
+
+  const reachableExtensions = await db.catalogQuery<{ extname: string }>(
+    `SELECT DISTINCT e.extname
+       FROM pg_extension e
+       JOIN pg_depend d
+         ON d.refobjid = e.oid
+        AND d.refclassid = 'pg_extension'::regclass
+        AND d.classid = 'pg_proc'::regclass
+       JOIN pg_proc p ON p.oid = d.objid
+      WHERE e.extname = ANY($1::text[])
+        AND has_function_privilege(p.oid, 'EXECUTE')
+      ORDER BY e.extname`,
+    [ESCAPE_EXTENSIONS],
+  );
+
+  const untrustedLanguages = await db.catalogQuery<{ lanname: string }>(
+    `SELECT lanname
+       FROM pg_language
+      WHERE NOT lanpltrusted
+        AND lanname NOT IN ('internal', 'c')
+        AND has_language_privilege(oid, 'USAGE')
+      ORDER BY lanname`,
+  );
+
+  const overridable: Severity = config.allowWritableRole ? "warning" : "fatal";
+  const checks: AuditCheck[] = [];
+
+  const blockingAttributes = roleAttributes.flatMap((row) =>
+    row.attributes
+      .filter((attribute) => ["SUPERUSER", "BYPASSRLS", "REPLICATION"].includes(attribute))
+      .map((attribute) => `${attribute} (vía ${row.rolname})`),
+  );
+
+  checks.push({
+    name: "el rol no es superusuario y no puede saltear RLS ni replicar",
+    passed: blockingAttributes.length === 0,
+    severity: "fatal",
+    detail:
+      blockingAttributes.length === 0
+        ? "El rol no tiene SUPERUSER, BYPASSRLS ni REPLICATION."
+        : `El rol tiene ${blockingAttributes.join(", ")}. Esto anula la transacción de solo lectura: un superusuario puede correr COPY ... TO PROGRAM, y BYPASSRLS ignora el row-level security que separa a los tenants.`,
+  });
+
+  checks.push({
+    name: "el rol no es miembro de un rol predefinido privilegiado",
+    passed: predefinedRoles.length === 0,
+    severity: "fatal",
+    detail:
+      predefinedRoles.length === 0
+        ? "El rol no es miembro de pg_execute_server_program, pg_write_server_files ni pg_read_server_files."
+        : `El rol es miembro de ${predefinedRoles.map((r) => r.rolname).join(", ")}, lo que permite leer o escribir archivos en el host de la base, o ejecutar programas.`,
+  });
+
+  const escapeVectors = [
+    ...reachableExtensions.map((row) => `extensión ${row.extname}`),
+    ...untrustedLanguages.map((row) => `lenguaje ${row.lanname}`),
+  ];
+
+  checks.push({
+    name: "no hay forma de escapar de la transacción de solo lectura",
+    passed: escapeVectors.length === 0,
+    severity: "fatal",
+    detail:
+      escapeVectors.length === 0
+        ? "Este rol no puede ejecutar dblink, foreign-data wrappers ni lenguajes procedurales no confiables."
+        : `El rol puede acceder a ${escapeVectors.join(", ")}. Esto abre una conexión separada o corre código fuera de la transacción, así que un simple SELECT podría igual escribir.`,
+  });
+
+  const createAttributes = roleAttributes.flatMap((row) =>
+    row.attributes
+      .filter((attribute) => ["CREATEDB", "CREATEROLE"].includes(attribute))
+      .map((attribute) => `${attribute} (vía ${row.rolname})`),
+  );
+
+  checks.push({
+    name: "el rol no puede crear bases de datos ni roles",
+    passed: createAttributes.length === 0,
+    severity: overridable,
+    detail:
+      createAttributes.length === 0
+        ? "El rol no tiene CREATEDB ni CREATEROLE."
+        : `El rol tiene ${createAttributes.join(", ")}.`,
+  });
+
+  const creatableSchemas = schemaRows.filter((row) => row.can_create).map((row) => row.nspname);
+
+  checks.push({
+    name: "el rol no puede crear objetos en ningún schema",
+    passed: creatableSchemas.length === 0,
+    severity: overridable,
+    detail:
+      creatableSchemas.length === 0
+        ? "El rol no tiene privilegio CREATE en ningún schema alcanzable."
+        : `El rol puede hacer CREATE en: ${creatableSchemas.join(", ")}. En PostgreSQL 14 y anteriores esto se le otorga a PUBLIC en el schema public por defecto.`,
+  });
+
+  const writable = writableTables.map(
+    (row) => `${row.nspname}.${row.relname} (${row.privileges.join("/")})`,
+  );
+
+  checks.push({
+    name: "el rol no tiene privilegios de escritura en ninguna tabla",
+    passed: writable.length === 0,
+    severity: overridable,
+    detail:
+      writable.length === 0
+        ? "El rol solo tiene privilegios de lectura en todas las tablas alcanzables."
+        : `El rol puede escribir en ${writable.length === 20 ? "al menos " : ""}${writable.length} objeto(s): ${writable.join(", ")}.`,
+  });
+
+  const report: AuditReport = {
+    role: identity.role,
+    database: identity.database,
+    serverVersion: identity.server_version,
+    schemas: schemaRows.map((row) => row.nspname),
+    checks,
+  };
+
+  const failures = checks.filter((check) => !check.passed && check.severity === "fatal");
+  if (failures.length > 0) {
+    throw new AuditFailure(
+      "El rol conectado no es seguro para un servidor MCP de solo lectura.",
+      failures,
+      report,
+    );
+  }
+
+  return report;
+}
+
+/**
+ * Determina el schema del tenant. Los grants USAGE del rol son la fuente de
+ * verdad; `schemaOverride` sólo elige entre schemas a los que el rol ya
+ * puede acceder (y en producción siempre es `null` — ver AuditConfig).
+ */
+export function resolveSchema(report: AuditReport, config: AuditConfig): string {
+  if (report.schemas.length === 0) {
+    throw new AuditFailure(
+      `El rol "${report.role}" no tiene USAGE en ningún schema no-sistema, así que no hay nada para consultar. Otorgale USAGE en el schema del tenant.`,
+      [],
+      report,
+    );
+  }
+
+  if (config.schemaOverride) {
+    if (!report.schemas.includes(config.schemaOverride)) {
+      throw new AuditFailure(
+        `Se pidió el schema "${config.schemaOverride}", pero el rol "${report.role}" no puede acceder a él. Schemas alcanzables: ${report.schemas.join(", ")}.`,
+        [],
+        report,
+      );
+    }
+    return config.schemaOverride;
+  }
+
+  if (report.schemas.length > 1) {
+    throw new AuditFailure(
+      `El rol "${report.role}" puede acceder a ${report.schemas.length} schemas (${report.schemas.join(", ")}), así que el schema del tenant es ambiguo. El rol debe tener USAGE en exactamente un schema no-sistema.`,
+      [],
+      report,
+    );
+  }
+
+  return report.schemas[0]!;
+}
+
+/** Un fix listo para copiar y pegar para la falla de auditoría más común. */
+export function remediationScript(schema: string): string {
+  return [
+    `CREATE ROLE mcp_reader LOGIN PASSWORD 'elegí-una-contraseña-fuerte';`,
+    `GRANT USAGE ON SCHEMA ${schema} TO mcp_reader;`,
+    `GRANT SELECT ON ALL TABLES IN SCHEMA ${schema} TO mcp_reader;`,
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schema} GRANT SELECT ON TABLES TO mcp_reader;`,
+    ``,
+    `-- PostgreSQL 14 y anteriores también necesitan esto, ya que CREATE en public se le otorga a PUBLIC por defecto:`,
+    `REVOKE CREATE ON SCHEMA public FROM PUBLIC;`,
+  ].join("\n");
+}
+
 /** Detalle completo de una falla de auditoría, para el 401 de Basic Auth (uso de operador/editor). */
 export function formatAuditFailure(error: AuditFailure): string {
   const lines = [error.message];
@@ -628,9 +948,9 @@ export function formatAuditFailure(error: AuditFailure): string {
   const schema = error.report?.schemas[0] ?? "tu_schema";
   const onlyOverridable = error.failures.every(
     (failure) =>
-      failure.name.includes("write privileges") ||
-      failure.name.includes("create objects") ||
-      failure.name.includes("create databases"),
+      failure.name.includes("privilegios de escritura") ||
+      failure.name.includes("crear objetos") ||
+      failure.name.includes("crear bases de datos"),
   );
 
   if (error.failures.length > 0 && onlyOverridable) {
@@ -654,16 +974,16 @@ export function summarizeAuditFailure(error: AuditFailure): string {
 }
 ```
 
-- [ ] **Step 4: Typecheck**
+- [ ] **Step 2: Typecheck**
 
 Run: `npm run typecheck`
 Expected: no new errors from `src/audit.ts` (the pre-existing `tools.ts`/`index.ts` errors from Task 4 are still there — unaffected).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add src/audit.ts
-git commit -m "Port audit.ts from mcpYt with a local AuditConfig and failure-formatting helpers"
+git commit -m "Port audit.ts from mcpYt with checks translated to Spanish and failure-formatting helpers"
 ```
 
 ---
@@ -1556,11 +1876,12 @@ describe("mcp/ against a real database (mcpYt tools ported in)", { skip: !ADMIN_
     const byName = (fragment: string) =>
       context.report.checks.find((check) => check.name.includes(fragment));
 
-    assert.equal(byName("superuser")?.passed, true);
-    assert.equal(byName("predefined role")?.passed, true);
-    assert.equal(byName("escape")?.passed, true);
+    // Fragmentos en español: audit.ts (Task 6) traduce los nombres de los checks.
+    assert.equal(byName("superusuario")?.passed, true);
+    assert.equal(byName("rol predefinido")?.passed, true);
+    assert.equal(byName("escapar")?.passed, true);
     assert.equal(
-      byName("write privileges")?.passed,
+      byName("privilegios de escritura")?.passed,
       true,
       "a SELECT-only role must pass the write-grant check",
     );
@@ -1572,7 +1893,7 @@ describe("mcp/ against a real database (mcpYt tools ported in)", { skip: !ADMIN_
       (error: unknown) => {
         assert.ok(error instanceof AuditFailure, `expected AuditFailure, got ${String(error)}`);
         const names = error.failures.map((failure) => failure.name).join(", ");
-        assert.match(names, /write privileges/);
+        assert.match(names, /privilegios de escritura/);
         return true;
       },
     );
@@ -1581,7 +1902,7 @@ describe("mcp/ against a real database (mcpYt tools ported in)", { skip: !ADMIN_
   test("ALLOW_WRITABLE_ROLE downgrades the write-grant failure to a warning", async () => {
     const context = await contextFor(WRITER, openPools, { allowWritableRole: true });
 
-    const writeCheck = context.report.checks.find((check) => check.name.includes("write privileges"));
+    const writeCheck = context.report.checks.find((check) => check.name.includes("privilegios de escritura"));
     assert.equal(writeCheck?.passed, false);
     assert.equal(writeCheck?.severity, "warning");
   });
