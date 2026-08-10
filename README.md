@@ -47,7 +47,7 @@ Portadas de `safe-postgres-mcp` (mcpYt), con el mismo comportamiento y las misma
 | `explain_query`      | Plan de ejecución de una query, sin correrla (nunca usa `ANALYZE`).          |
 | `get_database_info`  | A qué está conectado el server y qué chequeos de seguridad pasaron.          |
 
-El schema de cada persona se detecta solo, a partir de sus `GRANT`s: el rol tiene que tener `USAGE` en exactamente un schema no-sistema. Si tiene cero o más de uno, el login falla con un error que dice qué corregir.
+El schema de cada persona se detecta solo, a partir de sus `GRANT`s: es el único schema no-sistema donde el rol puede **leer** algo. `USAGE` no alcanza para desempatar, porque en Supabase `public` y `pgsodium` se lo otorgan a `PUBLIC` y por lo tanto los ve cualquier rol. Si el rol puede leer en cero o en más de un schema, el login falla con un error que dice qué corregir.
 
 ---
 
@@ -67,7 +67,7 @@ GRANT usuario2 TO mcp_bootstrap;
 
 `NOINHERIT` es importante: el bootstrap no usa privilegios propios, solo los del rol que asume con `SET ROLE`.
 
-> El schema de cada persona no se configura: se deduce de sus `GRANT`s. Cada rol tiene que tener `USAGE` en exactamente un schema no-sistema (el suyo). Si además tiene `USAGE` en `public`, el schema queda ambiguo y el login falla — revocá lo que no corresponda.
+> El schema de cada persona no se configura: se deduce de sus `GRANT`s. Cada rol tiene que poder leer (`SELECT` en al menos una relación) en exactamente un schema no-sistema — el suyo. Que además vea `public` o `pgsodium` no molesta, porque no puede leer nada ahí. Lo que sí rompe la detección es darle `SELECT` en dos schemas de tenant distintos.
 >
 > Si **solo** vas a usar editores con Basic Auth, el rol bootstrap es opcional (podés omitirlo).
 

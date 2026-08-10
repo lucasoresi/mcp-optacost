@@ -54,6 +54,13 @@ export interface AuditReport {
   serverVersion: string;
   /** Schemas no-sistema a los que el rol puede acceder, en orden alfabético. */
   schemas: string[];
+  /**
+   * Subconjunto de `schemas` donde el rol puede leer al menos una relación.
+   * Es lo que desambigua el schema del tenant: en Supabase todo rol tiene
+   * USAGE en `public` y `pgsodium` porque se le otorga a PUBLIC, pero no
+   * puede leer nada en ellos.
+   */
+  readableSchemas: string[];
   checks: AuditCheck[];
 }
 
@@ -99,6 +106,7 @@ interface RoleAttributeRow {
 interface SchemaRow {
   nspname: string;
   can_create: boolean;
+  is_readable: boolean;
 }
 
 interface WritableTableRow {
@@ -144,7 +152,14 @@ export async function runAudit(db: Db, config: AuditConfig): Promise<AuditReport
 
   const schemaRows = await db.catalogQuery<SchemaRow>(
     `SELECT n.nspname,
-            has_schema_privilege(n.oid, 'CREATE') AS can_create
+            has_schema_privilege(n.oid, 'CREATE') AS can_create,
+            EXISTS (
+              SELECT 1
+                FROM pg_class c
+               WHERE c.relnamespace = n.oid
+                 AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                 AND has_table_privilege(c.oid, 'SELECT')
+            ) AS is_readable
        FROM pg_namespace n
       WHERE has_schema_privilege(n.oid, 'USAGE')
         AND n.nspname NOT IN ('pg_catalog', 'information_schema')
@@ -289,6 +304,7 @@ export async function runAudit(db: Db, config: AuditConfig): Promise<AuditReport
     database: identity.database,
     serverVersion: identity.server_version,
     schemas: schemaRows.map((row) => row.nspname),
+    readableSchemas: schemaRows.filter((row) => row.is_readable).map((row) => row.nspname),
     checks,
   };
 
@@ -305,9 +321,13 @@ export async function runAudit(db: Db, config: AuditConfig): Promise<AuditReport
 }
 
 /**
- * Determina el schema del tenant. Los grants USAGE del rol son la fuente de
- * verdad; `schemaOverride` sólo elige entre schemas a los que el rol ya
- * puede acceder (y en producción siempre es `null` — ver AuditConfig).
+ * Determina el schema del tenant a partir de los privilegios reales del rol.
+ * `schemaOverride` sólo elige entre schemas a los que el rol ya puede
+ * acceder (y en producción siempre es `null` — ver AuditConfig).
+ *
+ * Tener USAGE no alcanza para desambiguar: en Supabase `public` y `pgsodium`
+ * le otorgan USAGE a PUBLIC, así que todo rol los ve. Lo que distingue al
+ * schema del tenant es poder LEER algo ahí (`readableSchemas`).
  */
 export function resolveSchema(report: AuditReport, config: AuditConfig): string {
   if (report.schemas.length === 0) {
@@ -329,15 +349,29 @@ export function resolveSchema(report: AuditReport, config: AuditConfig): string 
     return config.schemaOverride;
   }
 
-  if (report.schemas.length > 1) {
+  // Un único schema alcanzable no necesita desambiguarse, incluso si todavía
+  // está vacío: es el caso de un tenant recién creado, sin tablas aún.
+  if (report.schemas.length === 1) {
+    return report.schemas[0]!;
+  }
+
+  if (report.readableSchemas.length === 1) {
+    return report.readableSchemas[0]!;
+  }
+
+  if (report.readableSchemas.length === 0) {
     throw new AuditFailure(
-      `El rol "${report.role}" puede acceder a ${report.schemas.length} schemas (${report.schemas.join(", ")}), así que el schema del tenant es ambiguo. El rol debe tener USAGE en exactamente un schema no-sistema.`,
+      `El rol "${report.role}" tiene USAGE en ${report.schemas.length} schemas (${report.schemas.join(", ")}) pero no puede leer ninguna tabla en ninguno, así que no hay schema de tenant que usar. Otorgale SELECT en las tablas de su schema.`,
       [],
       report,
     );
   }
 
-  return report.schemas[0]!;
+  throw new AuditFailure(
+    `El rol "${report.role}" puede leer en ${report.readableSchemas.length} schemas (${report.readableSchemas.join(", ")}), así que el schema del tenant es ambiguo. El rol debe poder leer en exactamente un schema no-sistema.`,
+    [],
+    report,
+  );
 }
 
 /** Un fix listo para copiar y pegar para la falla de auditoría más común. */

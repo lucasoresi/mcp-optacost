@@ -179,6 +179,24 @@ describe("mcp/ against a real database (mcpYt tools ported in)", { skip: !ADMIN_
     );
   });
 
+  test("picks the tenant schema by readability, ignoring schemas it can only reach", async () => {
+    // Con schemaOverride en null, resolveSchema tiene que elegir mcp_test por
+    // sí solo. En Supabase el rol también ve public y pgsodium (USAGE otorgado
+    // a PUBLIC) sin poder leer nada ahí: readableSchemas es lo que desempata.
+    const pool = new pg.Pool({ connectionString: connectionFor(READER) });
+    openPools.push(pool);
+    const db = new Db({ pool, statementTimeoutMs: 10_000, assumeRole: null });
+    const auditConfig: AuditConfig = { allowWritableRole: false, schemaOverride: null };
+
+    const report = await runAudit(db, auditConfig);
+    assert.deepEqual(
+      report.readableSchemas,
+      [SCHEMA],
+      `only ${SCHEMA} should be readable, got ${report.readableSchemas.join(", ")} out of reachable ${report.schemas.join(", ")}`,
+    );
+    assert.equal(resolveSchema(report, auditConfig), SCHEMA);
+  });
+
   test("refuses a role that holds write grants", async () => {
     await assert.rejects(
       () => contextFor(WRITER, openPools),
