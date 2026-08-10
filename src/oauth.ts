@@ -16,8 +16,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import type { Express, Request, Response } from "express";
+import { AuditFailure, summarizeAuditFailure } from "./audit.js";
 import type { AppConfig } from "./config.js";
-import { Database } from "./db.js";
+import type { IdentityContextCache } from "./identity-context.js";
+import type { PoolRegistry } from "./pool.js";
 
 interface Client {
   clientId: string;
@@ -65,7 +67,12 @@ interface PersistedState {
   refreshTokens: [string, string][];
 }
 
-export function mountOAuth(app: Express, db: Database, cfg: AppConfig): OAuthLayer {
+export function mountOAuth(
+  app: Express,
+  pools: PoolRegistry,
+  identityContexts: IdentityContextCache,
+  cfg: AppConfig,
+): OAuthLayer {
   const clients = new Map<string, Client>();
   const codes = new Map<string, AuthCode>();
   const tokens = new Map<string, Token>();
@@ -193,11 +200,27 @@ export function mountOAuth(app: Express, db: Database, cfg: AppConfig): OAuthLay
       return;
     }
 
-    const err = username && password ? await db.validateCredentials(username, password) : "faltan credenciales";
+    const err = username && password ? await pools.validateCredentials(username, password) : "faltan credenciales";
     if (err) {
       res.status(401).setHeader("Content-Type", "text/html; charset=utf-8");
       res.send(
         loginPage({ client_id, redirect_uri, code_challenge, state: state ?? "", error: "Usuario o contraseña incorrectos." }),
+      );
+      return;
+    }
+
+    // Auditar acá, no sólo al primer /mcp: así la falla se ve en la pantalla
+    // de login, no como un error críptico ya "dentro" de ChatGPT.
+    try {
+      await identityContexts.get({ mode: "assume", username });
+    } catch (auditError) {
+      const message =
+        auditError instanceof AuditFailure
+          ? summarizeAuditFailure(auditError)
+          : "No se pudo verificar los permisos de este usuario.";
+      res.status(401).setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(
+        loginPage({ client_id, redirect_uri, code_challenge, state: state ?? "", error: message }),
       );
       return;
     }
