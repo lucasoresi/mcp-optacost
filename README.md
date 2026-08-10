@@ -26,21 +26,28 @@ El problema: ChatGPT y Claude (web/desktop) **solo hablan OAuth**; no mandan usu
 ## Seguridad de solo lectura (defensa en profundidad)
 
 1. **Permisos del usuario de Postgres** — cada rol ya tiene acceso solo a su schema. Barrera principal, la misma que usás hoy.
-2. **`SET ROLE`** (sesiones OAuth) — se ejecuta con la identidad y permisos de la persona.
-3. **Transacción `READ ONLY`** — cada consulta corre en `BEGIN TRANSACTION READ ONLY` y termina en `ROLLBACK`.
-4. **Validación previa del SQL** — un único statement y sólo `SELECT / WITH / EXPLAIN / SHOW / TABLE / VALUES`.
-5. **Límites** — `statement_timeout` y tope de filas (`MAX_ROWS`).
+2. **Auditoría de privilegios** — la primera vez que cada persona se conecta, el server audita su rol y le niega el acceso si tiene privilegios que podrían escapar de las capas siguientes: `SUPERUSER`, `BYPASSRLS`, `REPLICATION`, membresía en `pg_execute_server_program`/`pg_*_server_files`, o acceso a `dblink`/`postgres_fdw`/lenguajes no confiables. Esos chequeos son fatales y no se pueden anular. Los grants de escritura, `CREATE`, `CREATEDB` y `CREATEROLE` también rechazan por defecto, pero se pueden bajar a warning con `ALLOW_WRITABLE_ROLE=true` (la capa 4 los bloquea igual).
+3. **`SET ROLE`** (sesiones OAuth) — se ejecuta con la identidad y permisos de la persona, incluida la auditoría del punto anterior.
+4. **Transacción `READ ONLY`** — cada consulta corre en `BEGIN TRANSACTION READ ONLY` y termina en `ROLLBACK`.
+5. **Guard léxico previo al SQL** — un único statement y sólo `SELECT / WITH / EXPLAIN / SHOW / TABLE / VALUES`, más el protocolo extendido de Postgres, que rechaza múltiples comandos a nivel de protocolo.
+6. **Límites** — `statement_timeout` y tope de filas (`MAX_ROWS`).
 
 ---
 
 ## Tools que expone
 
-| Tool             | Qué hace                                                            |
-| ---------------- | ------------------------------------------------------------------ |
-| `list_schemas`   | Schemas visibles para tu usuario.                                  |
-| `list_tables`    | Tablas y vistas sobre las que tenés `SELECT`.                      |
-| `describe_table` | Columnas, tipos, PK y FKs de una tabla.                            |
-| `execute_sql`    | Una consulta de lectura con parámetros (`$1, $2, ...`).            |
+Portadas de `safe-postgres-mcp` (mcpYt), con el mismo comportamiento y las mismas descriptions — sólo cambia cómo se resuelve la identidad (auth de este server) en vez de un único `DATABASE_URL`.
+
+| Tool                 | Qué hace                                                                    |
+| -------------------- | --------------------------------------------------------------------------- |
+| `query`              | Una consulta de sólo lectura (`SELECT/WITH/EXPLAIN/TABLE/VALUES/SHOW`).      |
+| `list_tables`        | Tablas, vistas y vistas materializadas del schema, con tamaño y comentario.  |
+| `describe_table`     | Columnas, PK, FKs entrantes/salientes, constraints e índices de una tabla.   |
+| `list_relationships` | Todo el grafo de foreign keys del schema, para escribir JOINs correctos.     |
+| `explain_query`      | Plan de ejecución de una query, sin correrla (nunca usa `ANALYZE`).          |
+| `get_database_info`  | A qué está conectado el server y qué chequeos de seguridad pasaron.          |
+
+El schema de cada persona se detecta solo, a partir de sus `GRANT`s: el rol tiene que tener `USAGE` en exactamente un schema no-sistema. Si tiene cero o más de uno, el login falla con un error que dice qué corregir.
 
 ---
 
@@ -60,7 +67,7 @@ GRANT usuario2 TO mcp_bootstrap;
 
 `NOINHERIT` es importante: el bootstrap no usa privilegios propios, solo los del rol que asume con `SET ROLE`.
 
-> Si tu convención es "cada usuario tiene un schema con su mismo nombre", no toques `USER_SCHEMA_TEMPLATE`. Si el schema se llama distinto, ajustá la plantilla (ej. `data_{user}`).
+> El schema de cada persona no se configura: se deduce de sus `GRANT`s. Cada rol tiene que tener `USAGE` en exactamente un schema no-sistema (el suyo). Si además tiene `USAGE` en `public`, el schema queda ambiguo y el login falla — revocá lo que no corresponda.
 >
 > Si **solo** vas a usar editores con Basic Auth, el rol bootstrap es opcional (podés omitirlo).
 
@@ -164,9 +171,9 @@ claude mcp add postgres-ro --transport http https://tu-dominio/mcp \
 | `PGSSLMODE`             | `require`                        | `require` \| `no-verify` \| `disable`.                        |
 | `BOOTSTRAP_DB_USER`     | —                                | Rol que hace `SET ROLE` (para OAuth).                          |
 | `BOOTSTRAP_DB_PASSWORD` | —                                | Contraseña del rol bootstrap.                                  |
-| `USER_SCHEMA_TEMPLATE`  | `{user}`                         | Plantilla del schema por usuario.                             |
 | `STATEMENT_TIMEOUT_MS`  | `8000`                           | Timeout por consulta (ms).                                     |
-| `MAX_ROWS`              | `1000`                           | Tope de filas por `execute_sql`.                              |
+| `MAX_ROWS`              | `1000`                           | Tope de filas por `query`.                                     |
+| `ALLOW_WRITABLE_ROLE`   | `false`                          | Baja de fatal a warning el chequeo de permisos de escritura del rol conectado. Los chequeos de superuser, `BYPASSRLS` y extensiones de escape (`dblink`, etc.) nunca se pueden anular. |
 | `TOKEN_TTL_SECONDS`     | `3600`                           | Vida del access token OAuth.                                  |
 | `ENABLE_BASIC_AUTH`     | `true`                           | Permitir Basic Auth en `/mcp`.                                |
 | `PORT`                  | `3000`                           | Puerto HTTP.                                                   |
@@ -178,11 +185,19 @@ claude mcp add postgres-ro --transport http https://tu-dominio/mcp \
 
 ```
 src/
-├── index.ts   # Express + Streamable HTTP + resolución de identidad (Bearer/Basic)
-├── oauth.ts   # Authorization Server OAuth 2.1 (metadata, DCR, login, token, PKCE)
-├── tools.ts   # McpServer y tools, scopeadas al usuario autenticado
-├── db.ts      # pg multiusuario: conexión directa (Basic) o SET ROLE (OAuth), read-only
-└── config.ts  # Variables de entorno
+├── index.ts             # Express + Streamable HTTP + resolución de identidad (Bearer/Basic)
+├── oauth.ts             # Authorization Server OAuth 2.1 (metadata, DCR, login, token, PKCE)
+├── identity.ts          # El tipo Identity: "direct" (Basic) o "assume" (OAuth)
+├── pool.ts              # Ciclo de vida de los pools: por usuario y el bootstrap compartido
+├── db.ts                # Ejecución read-only sobre un pool inyectado (+ SET LOCAL ROLE)
+├── audit.ts             # Auditoría de privilegios y detección del schema del tenant
+├── identity-context.ts  # Arma y cachea, por usuario, el contexto que usan las tools
+├── tools.ts             # McpServer para un contexto ya resuelto
+├── tools/               # Las 6 tools portadas de mcpYt + registerTools()
+├── guard.ts             # Guard léxico del SQL (un statement, sólo lectura)
+├── format.ts            # Formateo de resultados en tablas de texto
+├── errors.ts            # Sanitización de errores (nunca filtra contraseñas)
+└── config.ts            # Variables de entorno
 ```
 
 Rutas: `POST/GET/DELETE /mcp`, `GET /authorize` + `POST /authorize`, `POST /token`, `POST /register`, `GET /.well-known/oauth-authorization-server`, `GET /.well-known/oauth-protected-resource`, `GET /healthz`.
