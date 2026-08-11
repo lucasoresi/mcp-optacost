@@ -1,13 +1,30 @@
 // Cliente de prueba para el MCP local usando Basic Auth.
-// Uso:  node test-client.mjs
-// Cambiá USER y PASS por tu rol de Postgres.
+//
+// Las credenciales salen del entorno, NUNCA de este archivo: es un archivo
+// versionado y el repo es público. Poné MCP_TEST_USER y MCP_TEST_PASSWORD en
+// tu .env (que está en .gitignore) o pasalas en la línea de comandos.
+//
+// Uso:
+//   node test-client.mjs
+//   MCP_TEST_USER=mi_rol MCP_TEST_PASSWORD=... node test-client.mjs
+//   MCP_URL=http://localhost:3000/mcp node test-client.mjs
 
+import "dotenv/config";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const URL_MCP = "http://localhost:3000/mcp";
-const USER = "user_cliente_a.nfjjlfovpznoipgkugdf";
-const PASS = "1234";
+const URL_MCP = process.env.MCP_URL ?? "http://localhost:3000/mcp";
+const USER = process.env.MCP_TEST_USER;
+const PASS = process.env.MCP_TEST_PASSWORD;
+
+if (!USER || !PASS) {
+  console.error(
+    "Faltan credenciales. Definí MCP_TEST_USER y MCP_TEST_PASSWORD en tu .env\n" +
+      "o pasalas en la línea de comandos:\n\n" +
+      "  MCP_TEST_USER=tu_rol MCP_TEST_PASSWORD=tu_clave node test-client.mjs\n",
+  );
+  process.exit(1);
+}
 
 const authHeader = "Basic " + Buffer.from(`${USER}:${PASS}`).toString("base64");
 

@@ -64,8 +64,9 @@ export class IdentityContextCache {
         ? this.pools.getUserPool(identity.username, identity.password)
         : this.pools.getBootstrapPool();
 
-    // El sufijo de Supabase (ej: ".nfjjlfovpznoipgkugdf") es sólo para el
-    // pooler; el rol real de Postgres es la parte antes del primer punto.
+    // El sufijo de Supabase (ej: ".abcdefghijklmnopqrst", el project ref) es
+    // sólo para el pooler; el rol real de Postgres es la parte antes del
+    // primer punto.
     const pgRole = identity.username.split(".")[0]!;
 
     const db = new Db({
