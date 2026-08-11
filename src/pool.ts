@@ -42,7 +42,9 @@ export class PoolRegistry {
 
   /** Pool directo para un usuario (Basic Auth). Cacheado por usuario+password. */
   getUserPool(user: string, password: string): pg.Pool {
-    const key = `${user} ${password}`;
+    // JSON en vez de concatenar: con un separador suelto, dos pares distintos
+    // de usuario/contraseña pueden producir la misma clave.
+    const key = JSON.stringify([user, password]);
     let pool = this.userPools.get(key);
     if (!pool) {
       pool = new pg.Pool(this.basePoolConfig(user, password));

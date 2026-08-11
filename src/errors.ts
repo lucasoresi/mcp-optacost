@@ -3,12 +3,24 @@
  *
  * The pg driver attaches connection details to several kinds of error, and MCP
  * tool results are shown to the model and often logged, so every message that
- * leaves this process passes through redact().
+ * leaves this process passes through redact() -- via describeError(), which is
+ * the only way errors are turned into text for a caller (tools/shared.ts's
+ * guarded(), and the session-init failure in index.ts).
  */
 
 const secrets = new Set<string>();
 
-/** Registers a value that must never appear in output. Short values are ignored. */
+/**
+ * Registers a value that must never appear in output. Short values are ignored.
+ *
+ * Deliberately left uncalled in this server, unlike in the single-tenant original
+ * it was ported from. There, one password came from a static DATABASE_URL and was
+ * registered once at startup. Here passwords arrive per request, from many people,
+ * so registering them would grow this set without bound AND corrupt query results:
+ * a tenant whose password is a common string would have every occurrence of that
+ * string blanked out of everyone's data. The connection-string pattern below is
+ * what actually guards this deployment. Do not wire this up to request passwords.
+ */
 export function registerSecret(value: string | null | undefined): void {
   if (value && value.length >= 4) secrets.add(value);
 }

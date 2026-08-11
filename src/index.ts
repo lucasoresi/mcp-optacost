@@ -18,6 +18,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { AuditFailure, formatAuditFailure } from "./audit.js";
 import { loadConfig } from "./config.js";
+import { describeError } from "./errors.js";
 import type { Identity } from "./identity.js";
 import { IdentityContextCache } from "./identity-context.js";
 import { mountOAuth } from "./oauth.js";
@@ -135,7 +136,10 @@ app.post("/mcp", async (req: Request, res: Response) => {
         if (err instanceof AuditFailure) {
           return send401(res, { ok: false, status: 401, message: formatAuditFailure(err) });
         }
-        const detail = err instanceof Error ? err.message : String(err);
+        // describeError, no err.message: el mensaje crudo del driver sale del
+        // proceso acá, así que pasa por la misma sanitización que usan las
+        // tools (ver errors.ts).
+        const detail = describeError(err);
         return send401(res, {
           ok: false,
           status: 401,

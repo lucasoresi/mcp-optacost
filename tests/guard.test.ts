@@ -227,3 +227,59 @@ test('rejects an unterminated block comment', () => {
 test('rejects an unterminated dollar-quoted string', () => {
   assertRejected('SELECT $$abierto', 'unterminated-literal');
 });
+
+// --- set_config: cambio de parámetro en runtime ------------------------------
+// Es el único camino por el que SQL de usuario puede volver a cambiar de rol
+// dentro de la transacción, escapando del tenant al que la sesión está anclada.
+// Ver el comentario de RUNTIME_PARAMETER_CHANGE en src/guard.ts.
+
+test('rejects a bare set_config call', () => {
+  assertRejected("SELECT set_config('role', 'otro_tenant', true)", 'runtime-parameter-change');
+});
+
+test('rejects set_config hidden inside an allowed CTE', () => {
+  assertRejected(
+    "WITH x AS (SELECT set_config('role', 'otro_tenant', true)) SELECT * FROM otro_schema.tabla",
+    'runtime-parameter-change',
+  );
+});
+
+test('rejects schema-qualified set_config', () => {
+  assertRejected("SELECT pg_catalog.set_config('role', 'otro_tenant', true)", 'runtime-parameter-change');
+});
+
+test('rejects set_config written as a quoted identifier', () => {
+  assertRejected('SELECT "set_config"(\'role\', \'otro_tenant\', true)', 'runtime-parameter-change');
+});
+
+test('rejects set_config regardless of case and spacing', () => {
+  assertRejected("SELECT SET_CONFIG  ('role', 'otro_tenant', true)", 'runtime-parameter-change');
+});
+
+test('rejects set_config with a computed first argument', () => {
+  // Por esto se rechaza la llamada entera en vez de mirar qué parámetro toca.
+  assertRejected(
+    "SELECT set_config((SELECT 'ro' || 'le'), 'otro_tenant', true)",
+    'runtime-parameter-change',
+  );
+});
+
+test('rejects set_config targeting search_path', () => {
+  assertRejected("SELECT set_config('search_path', 'pg_catalog', true)", 'runtime-parameter-change');
+});
+
+test('rejects set_config inside EXPLAIN', () => {
+  assertRejected("EXPLAIN SELECT set_config('role', 'otro_tenant', true)", 'runtime-parameter-change');
+});
+
+test('still accepts a string literal that merely mentions set_config', () => {
+  assertAccepted("SELECT * FROM logs WHERE mensaje LIKE '%set_config%'");
+});
+
+test('still accepts a column that merely happens to be named set_config', () => {
+  assertAccepted('SELECT set_config FROM configuraciones');
+});
+
+test('still accepts current_setting, which only reads a parameter', () => {
+  assertAccepted("SELECT current_setting('search_path')");
+});

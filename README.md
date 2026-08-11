@@ -29,7 +29,7 @@ El problema: ChatGPT y Claude (web/desktop) **solo hablan OAuth**; no mandan usu
 2. **Auditoría de privilegios** — la primera vez que cada persona se conecta, el server audita su rol y le niega el acceso si tiene privilegios que podrían escapar de las capas siguientes: `SUPERUSER`, `BYPASSRLS`, `REPLICATION`, membresía en `pg_execute_server_program`/`pg_*_server_files`, o acceso a `dblink`/`postgres_fdw`/lenguajes no confiables. Esos chequeos son fatales y no se pueden anular. Los grants de escritura, `CREATE`, `CREATEDB` y `CREATEROLE` también rechazan por defecto, pero se pueden bajar a warning con `ALLOW_WRITABLE_ROLE=true` (la capa 4 los bloquea igual).
 3. **`SET ROLE`** (sesiones OAuth) — se ejecuta con la identidad y permisos de la persona, incluida la auditoría del punto anterior.
 4. **Transacción `READ ONLY`** — cada consulta corre en `BEGIN TRANSACTION READ ONLY` y termina en `ROLLBACK`.
-5. **Guard léxico previo al SQL** — un único statement y sólo `SELECT / WITH / EXPLAIN / SHOW / TABLE / VALUES`, más el protocolo extendido de Postgres, que rechaza múltiples comandos a nivel de protocolo.
+5. **Guard léxico previo al SQL** — un único statement y sólo `SELECT / WITH / EXPLAIN / SHOW / TABLE / VALUES`, sin llamadas a `set_config()` (la única forma en que una consulta puede cambiar de rol a mitad de camino y salirse de su tenant), más el protocolo extendido de Postgres, que rechaza múltiples comandos a nivel de protocolo.
 6. **Límites** — `statement_timeout` y tope de filas (`MAX_ROWS`).
 
 ---

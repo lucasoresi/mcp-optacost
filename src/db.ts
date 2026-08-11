@@ -96,6 +96,27 @@ export class Db {
   }
 
   /**
+   * Abre la transacción READ ONLY y le aplica TODO el confinamiento de la
+   * sesión: rol asumido, timeouts y schema. Está en un solo lugar a propósito
+   * — `runUserQuery` tiene que reabrir la transacción en su camino de
+   * fallback, y cualquier setting que se olvide ahí queda sin aplicar.
+   */
+  private async beginReadOnly(client: PoolClient): Promise<void> {
+    await client.query("BEGIN TRANSACTION READ ONLY");
+    if (this.assumeRole) {
+      // SET ROLE no hereda el search_path del rol destino: se fija abajo.
+      await client.query(`SET LOCAL ROLE ${quoteIdentifier(this.assumeRole)}`);
+    }
+    await client.query(`SET LOCAL statement_timeout = ${this.statementTimeoutMs}`);
+    await client.query(
+      `SET LOCAL idle_in_transaction_session_timeout = ${this.statementTimeoutMs}`,
+    );
+    if (this.schema) {
+      await client.query(`SET LOCAL search_path TO ${quoteIdentifier(this.schema)}`);
+    }
+  }
+
+  /**
    * Corre `work` dentro de `BEGIN TRANSACTION READ ONLY` con los timeouts
    * configurados, el rol asumido (si aplica) y el schema tenant en el
    * search_path. La transacción siempre se rollbackea, incluso si tuvo
@@ -104,18 +125,7 @@ export class Db {
   async withReadOnly<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {
-      await client.query("BEGIN TRANSACTION READ ONLY");
-      if (this.assumeRole) {
-        // SET ROLE no hereda el search_path del rol destino: se fija abajo.
-        await client.query(`SET LOCAL ROLE ${quoteIdentifier(this.assumeRole)}`);
-      }
-      await client.query(`SET LOCAL statement_timeout = ${this.statementTimeoutMs}`);
-      await client.query(
-        `SET LOCAL idle_in_transaction_session_timeout = ${this.statementTimeoutMs}`,
-      );
-      if (this.schema) {
-        await client.query(`SET LOCAL search_path TO ${quoteIdentifier(this.schema)}`);
-      }
+      await this.beginReadOnly(client);
       return await work(client);
     } finally {
       try {
@@ -165,14 +175,7 @@ export class Db {
           // Se sigue de largo, corre el original, y se trunca en memoria.
           if (!isSyntaxLikeError(error)) throw error;
           await client.query("ROLLBACK");
-          await client.query("BEGIN TRANSACTION READ ONLY");
-          if (this.assumeRole) {
-            await client.query(`SET LOCAL ROLE ${quoteIdentifier(this.assumeRole)}`);
-          }
-          await client.query(`SET LOCAL statement_timeout = ${this.statementTimeoutMs}`);
-          if (this.schema) {
-            await client.query(`SET LOCAL search_path TO ${quoteIdentifier(this.schema)}`);
-          }
+          await this.beginReadOnly(client);
         }
       }
 

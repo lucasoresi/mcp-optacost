@@ -14,7 +14,8 @@ export type GuardRule =
   | 'multiple-statements'
   | 'forbidden-statement'
   | 'data-modifying-cte'
-  | 'explain-analyze';
+  | 'explain-analyze'
+  | 'runtime-parameter-change';
 
 export type GuardResult =
   | { ok: true; statement: string }
@@ -27,9 +28,37 @@ const DATA_MODIFYING = /\b(insert|update|delete|merge)\b/i;
 const ANALYZE = /\banalyze\b/i;
 const FIRST_WORD = /[A-Za-z_][A-Za-z0-9_]*/;
 
+/**
+ * `set_config()` reaches the same code path as the SET command, but it is an
+ * ordinary function, so the leading-keyword check above never sees it: it rides
+ * inside any permitted SELECT/WITH.
+ *
+ * That matters most for `role`. Postgres checks role membership against
+ * `session_user`, not against whoever `SET LOCAL ROLE` made current -- and for
+ * OAuth sessions `session_user` is the shared bootstrap role, which by design is
+ * a member of every tenant. So one `set_config('role', ...)` buried in an
+ * otherwise innocent query would step out of the tenant this session is anchored
+ * to and read another tenant's schema.
+ *
+ * The call is rejected outright rather than inspected: the first argument can be
+ * any expression (even a subquery), so deciding *which* parameter it targets is
+ * not something a lexer can do reliably. No read-only query needs this function.
+ * The trailing `\(` keeps a column that merely happens to be named `set_config`
+ * from being caught.
+ */
+const RUNTIME_PARAMETER_CHANGE = /\bset_config\s*\(/i;
+
 interface MaskResult {
   /** Same length as the input, with comment and literal bytes replaced by spaces. */
   masked: string;
+  /**
+   * Same as `masked`, except quoted identifiers keep their contents (only the
+   * quotes themselves are blanked). Needed to catch `"set_config"(...)`, which
+   * Postgres resolves to the same function but which `masked` blanks away.
+   * Statement splitting deliberately does NOT use this, so a semicolon inside a
+   * quoted identifier still cannot fake a statement boundary.
+   */
+  maskedWithIdentifiers: string;
   /** Description of the unclosed construct, or null when the input is well-formed. */
   unterminated: string | null;
 }
@@ -47,6 +76,13 @@ function maskLiteralsAndComments(sql: string): MaskResult {
   const out = sql.split('');
   const blank = (from: number, to: number) => {
     for (let k = from; k < to && k < out.length; k++) out[k] = ' ';
+  };
+
+  /** Spans of quoted identifiers, including their surrounding quotes. */
+  const identifierSpans: Array<{ start: number; end: number }> = [];
+  const bail = (unterminated: string): MaskResult => {
+    const masked = out.join('');
+    return { masked, maskedWithIdentifiers: masked, unterminated };
   };
 
   let i = 0;
@@ -77,7 +113,7 @@ function maskLiteralsAndComments(sql: string): MaskResult {
           j++;
         }
       }
-      if (depth > 0) return { masked: out.join(''), unterminated: 'block comment' };
+      if (depth > 0) return bail('block comment');
       blank(i, j);
       i = j;
       continue;
@@ -88,7 +124,7 @@ function maskLiteralsAndComments(sql: string): MaskResult {
       if (match) {
         const tag = match[0];
         const end = sql.indexOf(tag, i + tag.length);
-        if (end === -1) return { masked: out.join(''), unterminated: 'dollar-quoted string' };
+        if (end === -1) return bail('dollar-quoted string');
         blank(i, end + tag.length);
         i = end + tag.length;
         continue;
@@ -120,7 +156,7 @@ function maskLiteralsAndComments(sql: string): MaskResult {
         }
         j++;
       }
-      if (!closed) return { masked: out.join(''), unterminated: 'string literal' };
+      if (!closed) return bail('string literal');
       blank(i, j);
       i = j;
       continue;
@@ -141,7 +177,8 @@ function maskLiteralsAndComments(sql: string): MaskResult {
         }
         j++;
       }
-      if (!closed) return { masked: out.join(''), unterminated: 'quoted identifier' };
+      if (!closed) return bail('quoted identifier');
+      identifierSpans.push({ start: i, end: j });
       blank(i, j);
       i = j;
       continue;
@@ -150,7 +187,16 @@ function maskLiteralsAndComments(sql: string): MaskResult {
     i++;
   }
 
-  return { masked: out.join(''), unterminated: null };
+  const withIdentifiers = out.slice();
+  for (const span of identifierSpans) {
+    for (let k = span.start + 1; k < span.end - 1; k++) withIdentifiers[k] = sql[k]!;
+  }
+
+  return {
+    masked: out.join(''),
+    maskedWithIdentifiers: withIdentifiers.join(''),
+    unterminated: null,
+  };
 }
 
 /** Splits on semicolons that sit outside any literal or comment. */
@@ -168,7 +214,7 @@ function splitStatements(masked: string): Array<{ start: number; end: number }> 
 }
 
 export function inspectSql(sql: string): GuardResult {
-  const { masked, unterminated } = maskLiteralsAndComments(sql);
+  const { masked, maskedWithIdentifiers, unterminated } = maskLiteralsAndComments(sql);
 
   if (unterminated) {
     return {
@@ -203,6 +249,15 @@ export function inspectSql(sql: string): GuardResult {
       ok: false,
       rule: 'forbidden-statement',
       reason: `This server is read-only, so ${firstWord ?? 'this statement'} is not allowed. Queries must begin with ${[...ALLOWED_LEADING_KEYWORDS].join(', ')}.`,
+    };
+  }
+
+  if (RUNTIME_PARAMETER_CHANGE.test(maskedWithIdentifiers.slice(span.start, span.end))) {
+    return {
+      ok: false,
+      rule: 'runtime-parameter-change',
+      reason:
+        'set_config() changes a runtime parameter for the rest of the transaction, including the role this session is restricted to, so it is not allowed here.',
     };
   }
 
