@@ -6,6 +6,8 @@ import { explainQuery, explainQueryDescription, explainQueryInputSchema } from "
 import { listRelationships, listRelationshipsDescription } from "./list-relationships.js";
 import { listTables, listTablesDescription } from "./list-tables.js";
 import { queryDescription, queryInputSchema, runQuery } from "./query.js";
+import { getDatabaseSkill, getDatabaseSkillDescription, getSkillInputSchema } from "./get-skill.js";
+import { listDatabaseDomains, listDatabaseDomainsDescription } from "./list-skills.js";
 import type { ToolContext } from "./shared.js";
 
 /** Every tool here is read-only, which the annotations advertise to the client. */
@@ -81,5 +83,27 @@ export function registerTools(server: McpServer, context: ToolContext): void {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     async () => databaseInfo(context),
+  );
+
+  server.registerTool(
+    'list_database_domains',
+    {
+      title: 'List database domains',
+      description: listDatabaseDomainsDescription(context),
+      inputSchema: {},
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    async () => listDatabaseDomains(context),
+  );
+
+  server.registerTool(
+    'get_database_skill',
+    {
+      title: 'Load a database domain skill',
+      description: getDatabaseSkillDescription(context),
+      inputSchema: getSkillInputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    async (args) => getDatabaseSkill(context, args),
   );
 }

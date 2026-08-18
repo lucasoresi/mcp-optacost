@@ -13,11 +13,13 @@ export function createMcpServer(context: ToolContext): McpServer {
     { name: "postgres-readonly", version: "2.0.0" },
     {
       instructions:
-        `Read-only PostgreSQL server, anchored to the "${context.schema}" schema. ` +
-        "Start with list_tables to see what's available, then describe_table or " +
-        "list_relationships before writing joins. query runs a single read-only " +
-        "statement; explain_query shows its plan without running it. Nothing here " +
-        "can modify data or structure.",
+        `Read-only PostgreSQL server for the Optacost lab cost & pricing database, ` +
+        `anchored to the "${context.schema}" schema. Before writing any SQL, FIRST call ` +
+        "list_database_domains to see the business domains, THEN call get_database_skill " +
+        "for the relevant domain to load its tables, relationships, semantic rules and " +
+        "validated example queries. Never guess table or column names — if unsure, use " +
+        "describe_table or list_relationships. Then run one read-only statement with query, " +
+        "or preview its plan with explain_query. Nothing here can modify data or structure.",
     },
   );
 
