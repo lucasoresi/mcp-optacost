@@ -14,9 +14,12 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import type { Express, Request, Response } from "express";
+import { AuditFailure, summarizeAuditFailure } from "./audit.js";
 import type { AppConfig } from "./config.js";
-import { Database } from "./db.js";
+import type { IdentityContextCache } from "./identity-context.js";
+import type { PoolRegistry } from "./pool.js";
 
 interface Client {
   clientId: string;
@@ -55,11 +58,59 @@ export interface OAuthLayer {
   resolveToken(token: string): string | null;
 }
 
-export function mountOAuth(app: Express, db: Database, cfg: AppConfig): OAuthLayer {
+// ── Persistencia en disco ──────────────────────────────────────────
+const STATE_FILE = process.env.OAUTH_STATE_FILE ?? "./oauth-state.json";
+
+interface PersistedState {
+  clients: [string, Client][];
+  tokens: [string, Token][];
+  refreshTokens: [string, string][];
+}
+
+export function mountOAuth(
+  app: Express,
+  pools: PoolRegistry,
+  identityContexts: IdentityContextCache,
+  cfg: AppConfig,
+): OAuthLayer {
   const clients = new Map<string, Client>();
   const codes = new Map<string, AuthCode>();
   const tokens = new Map<string, Token>();
   const refreshTokens = new Map<string, string>(); // refresh -> username
+
+  // Carga estado previo del disco (si existe).
+  function loadState(): void {
+    try {
+      const raw = readFileSync(STATE_FILE, "utf8");
+      const state = JSON.parse(raw) as Partial<PersistedState>;
+      const now = Date.now();
+      for (const [k, v] of state.clients ?? []) clients.set(k, v);
+      for (const [k, v] of state.tokens ?? []) {
+        if (v.expiresAt > now) tokens.set(k, v); // descartar expirados
+      }
+      for (const [k, v] of state.refreshTokens ?? []) refreshTokens.set(k, v);
+      console.log(`[oauth] Estado cargado desde ${STATE_FILE} (${clients.size} clientes, ${tokens.size} tokens).`);
+    } catch {
+      console.log(`[oauth] Sin estado previo en ${STATE_FILE} — arrancando limpio.`);
+    }
+  }
+
+  // Guarda el estado actual al disco de forma síncrona (llamadas poco frecuentes).
+  function saveState(): void {
+    try {
+      const state: PersistedState = {
+        clients: [...clients.entries()],
+        tokens: [...tokens.entries()],
+        refreshTokens: [...refreshTokens.entries()],
+      };
+      writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+    } catch (e) {
+      console.error("[oauth] No se pudo guardar el estado OAuth:", e);
+    }
+  }
+
+  loadState();
+
 
   const issuer = cfg.publicUrl;
   const resourceUrl = `${issuer}/mcp`;
@@ -109,6 +160,7 @@ export function mountOAuth(app: Express, db: Database, cfg: AppConfig): OAuthLay
       redirectUris: redirectUris as string[],
       name: typeof body.client_name === "string" ? body.client_name : undefined,
     });
+    saveState();
     res.status(201).json({
       client_id: clientId,
       redirect_uris: redirectUris,
@@ -148,11 +200,27 @@ export function mountOAuth(app: Express, db: Database, cfg: AppConfig): OAuthLay
       return;
     }
 
-    const err = username && password ? await db.validateCredentials(username, password) : "faltan credenciales";
+    const err = username && password ? await pools.validateCredentials(username, password) : "faltan credenciales";
     if (err) {
       res.status(401).setHeader("Content-Type", "text/html; charset=utf-8");
       res.send(
         loginPage({ client_id, redirect_uri, code_challenge, state: state ?? "", error: "Usuario o contraseña incorrectos." }),
+      );
+      return;
+    }
+
+    // Auditar acá, no sólo al primer /mcp: así la falla se ve en la pantalla
+    // de login, no como un error críptico ya "dentro" de ChatGPT.
+    try {
+      await identityContexts.get({ mode: "assume", username });
+    } catch (auditError) {
+      const message =
+        auditError instanceof AuditFailure
+          ? summarizeAuditFailure(auditError)
+          : "No se pudo verificar los permisos de este usuario.";
+      res.status(401).setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(
+        loginPage({ client_id, redirect_uri, code_challenge, state: state ?? "", error: message }),
       );
       return;
     }
@@ -207,6 +275,7 @@ export function mountOAuth(app: Express, db: Database, cfg: AppConfig): OAuthLay
     const refreshToken = rand(32);
     tokens.set(accessToken, { username, expiresAt: Date.now() + cfg.tokenTtlSeconds * 1000 });
     refreshTokens.set(refreshToken, username);
+    saveState();
     res.json({
       access_token: accessToken,
       token_type: "Bearer",
@@ -224,7 +293,9 @@ export function mountOAuth(app: Express, db: Database, cfg: AppConfig): OAuthLay
   setInterval(() => {
     const now = Date.now();
     for (const [k, v] of codes) if (v.expiresAt < now) codes.delete(k);
-    for (const [k, v] of tokens) if (v.expiresAt < now) tokens.delete(k);
+    let changed = false;
+    for (const [k, v] of tokens) if (v.expiresAt < now) { tokens.delete(k); changed = true; }
+    if (changed) saveState();
   }, 60_000).unref();
 
   return {
@@ -233,6 +304,7 @@ export function mountOAuth(app: Express, db: Database, cfg: AppConfig): OAuthLay
       if (!t) return null;
       if (t.expiresAt < Date.now()) {
         tokens.delete(token);
+        saveState();
         return null;
       }
       return t.username;
