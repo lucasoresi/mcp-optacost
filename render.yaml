@@ -20,7 +20,7 @@ services:
   - type: web
     name: mcp-optacost
     runtime: docker
-    plan: starter          # 'free' se suspende por inactividad y pierde el estado en memoria; 'starter'+ no duerme.
+    plan: free             # Sin costo / sin tarjeta. Se suspende por inactividad (~15 min) y pierde el estado en memoria al despertar. Subí a 'starter' (~US$7/mes) para producción.
     dockerfilePath: ./Dockerfile
     numInstances: 1        # No aumentar: estado en memoria, no apto para múltiples réplicas.
     healthCheckPath: /healthz
