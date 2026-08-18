@@ -44,7 +44,7 @@ services:
       - key: PGPORT
         value: "5432"
       - key: PGSSLMODE
-        value: require       # require | no-verify | disable
+        value: no-verify     # require | no-verify | disable — Supabase/PG gestionados usan cert self-signed, por eso 'no-verify' (TLS sí, verificación de cadena no).
 
       # --- Comportamiento del server ---
       - key: NODE_ENV
