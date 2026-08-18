@@ -1,0 +1,75 @@
+# Render Blueprint — despliega el MCP server como Web Service (Docker).
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Uso:
+#   1. Push de esta rama a GitHub.
+#   2. En Render: New → Blueprint → seleccioná el repo. Detecta este archivo.
+#   3. Completá las env vars marcadas `sync: false` (no se versionan por seguridad).
+#   4. Tras el primer deploy, seteá PUBLIC_URL con la URL pública que asignó Render
+#      (ej. https://mcp-optacost.onrender.com) y redeployá.
+#
+# Notas de diseño (ver CLAUDE.md):
+#   - Una sola instancia: el estado OAuth y las connection pools viven en memoria
+#     del proceso. NO habilitar autoscaling ni subir numInstances.
+#   - El estado OAuth se persiste en un JSON en disco. El filesystem de Render es
+#     efímero salvo que montes un Disk (ver bloque `disk` comentado más abajo);
+#     sin él, los clientes OAuth deben re-registrarse tras cada deploy/restart.
+#     Con Basic Auth solo, no hace falta.
+
+services:
+  - type: web
+    name: mcp-optacost
+    runtime: docker
+    plan: starter          # 'free' se suspende por inactividad y pierde el estado en memoria; 'starter'+ no duerme.
+    dockerfilePath: ./Dockerfile
+    numInstances: 1        # No aumentar: estado en memoria, no apto para múltiples réplicas.
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # --- Requeridas ---
+      - key: PUBLIC_URL
+        sync: false        # Seteá con la URL pública de Render tras el primer deploy.
+      - key: PGHOST
+        sync: false
+      - key: PGDATABASE
+        sync: false
+
+      # --- Credenciales del rol bootstrap (para sesiones OAuth) ---
+      - key: BOOTSTRAP_DB_USER
+        sync: false
+      - key: BOOTSTRAP_DB_PASSWORD
+        sync: false
+
+      # --- Conexión Postgres (con defaults del server) ---
+      - key: PGPORT
+        value: "5432"
+      - key: PGSSLMODE
+        value: require       # require | no-verify | disable
+
+      # --- Comportamiento del server ---
+      - key: NODE_ENV
+        value: production
+      - key: MAX_ROWS
+        value: "1000"
+      - key: STATEMENT_TIMEOUT_MS
+        value: "8000"
+      - key: TOKEN_TTL_SECONDS
+        value: "3600"
+      - key: ALLOW_WRITABLE_ROLE
+        value: "false"
+      - key: ENABLE_BASIC_AUTH
+        value: "true"
+      - key: ALLOWED_ORIGINS
+        value: https://claude.ai,https://chatgpt.com
+      # PORT lo inyecta Render automáticamente; config.ts lo lee (default 3000).
+
+    # --- (Opcional) Disco persistente para el estado OAuth ---
+    # Descomentá para que los clientes OAuth sobrevivan a los deploys.
+    # Requiere plan pago y fuerza instancia única (ya es el caso).
+    # disk:
+    #   name: oauth-state
+    #   mountPath: /data
+    #   sizeGB: 1
+    # y agregá a envVars:
+    #   - key: OAUTH_STATE_FILE
+    #     value: /data/oauth-state.json
