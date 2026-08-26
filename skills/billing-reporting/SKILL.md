@@ -4,10 +4,18 @@ description: >-
   What was actually performed and billed per practice, insurer, headquarters and
   period, including derivations. Use for revenue/volume questions by month,
   practice or branch, and for profitability when combined with cost composition.
-  Headline tables: reportings, headquarters.
+  Headline tables: reportings, headquarters. This Skill answers billing
+  QUESTIONS; to PRODUCE an informe/reporte document, load `billing-report` too.
 ---
 
 # Billing & Reporting
+
+> **Asked for an *informe* / *reporte* / *report* (a document), not a number?**
+> This Skill gives you the data semantics; the deliverable's structure lives in
+> the **`billing-report`** output Skill — a frozen HTML template so every report
+> comes out identical across tenants. Load both: `billing-reporting` for what
+> the columns mean, `billing-report` for what to build. Never improvise the
+> report layout from this Skill alone.
 
 ## Overview
 This domain records **actual activity and billing**: how many of each practice

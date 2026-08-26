@@ -23,6 +23,7 @@ import type { Identity } from "./identity.js";
 import { IdentityContextCache } from "./identity-context.js";
 import { mountOAuth } from "./oauth.js";
 import { PoolRegistry } from "./pool.js";
+import { takeReport } from "./report.js";
 import { createMcpServer } from "./tools.js";
 
 const cfg = loadConfig();
@@ -60,6 +61,25 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 app.get("/healthz", (_req, res) => res.json({ status: "ok" }));
+
+// ── Informes renderizados ───────────────────────────────────────────
+// La tool `render_billing_report` deja el HTML acá y devuelve este link.
+// El id son 256 bits aleatorios y el informe vive una hora en memoria: la ruta
+// no pide credenciales para que el usuario pueda abrirlo en el navegador, así
+// que el secreto es el link. No pongas acá nada que no puedas compartir con
+// quien tenga el link durante esa hora.
+app.get("/report/:id", (req: Request, res: Response) => {
+  const report = takeReport(req.params.id ?? "");
+  if (!report) {
+    res.status(404).type("text/plain; charset=utf-8")
+      .send("Ese informe no existe o ya venció. Pedí que lo generen de nuevo.");
+    return;
+  }
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  res.setHeader("Content-Disposition", `inline; filename="${report.filename}"`);
+  res.type("text/html; charset=utf-8").send(report.html);
+});
 
 // OAuth (metadata, register, authorize, token). Devuelve resolveToken().
 const oauth = mountOAuth(app, pools, identityContexts, cfg);

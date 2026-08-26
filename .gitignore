@@ -3,4 +3,5 @@ dist/
 .env
 *.log
 oauth-state.json
+oauth-state.json.bak
 .superpowers/

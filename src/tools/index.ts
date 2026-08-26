@@ -8,6 +8,11 @@ import { listTables, listTablesDescription } from "./list-tables.js";
 import { queryDescription, queryInputSchema, runQuery } from "./query.js";
 import { getDatabaseSkill, getDatabaseSkillDescription, getSkillInputSchema } from "./get-skill.js";
 import { listDatabaseDomains, listDatabaseDomainsDescription } from "./list-skills.js";
+import {
+  renderBillingReportDescription,
+  renderBillingReportInputSchema,
+  renderBillingReportTool,
+} from "./render-report.js";
 import type { ToolContext } from "./shared.js";
 
 /** Every tool here is read-only, which the annotations advertise to the client. */
@@ -105,5 +110,23 @@ export function registerTools(server: McpServer, context: ToolContext): void {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     async (args) => getDatabaseSkill(context, args),
+  );
+
+  server.registerTool(
+    'render_billing_report',
+    {
+      title: 'Render the billing report',
+      description: renderBillingReportDescription(context),
+      inputSchema: renderBillingReportInputSchema,
+      annotations: {
+        // No toca la base, pero cada llamada crea un informe nuevo en memoria:
+        // no es idempotente y por eso no lleva READ_ONLY_ANNOTATIONS.
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (args) => renderBillingReportTool(context, args as { data: unknown; format?: 'url' | 'html' }),
   );
 }

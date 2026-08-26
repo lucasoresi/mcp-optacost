@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<!-- optacost-billing-report v1 · plantilla textual · copiar sin reescribir -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Informe de facturación · PERIODO · TENANT</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:#f9f9f7; --surface-1:#fcfcfb; --text-primary:#0b0b0b; --text-secondary:#52514e;
+    --muted:#898781; --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,0.10);
+    --series-1:#2a78d6; --series-2:#eb6834; --good:#006300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page:#0d0d0d; --surface-1:#1a1a19; --text-primary:#ffffff; --text-secondary:#c3c2b7;
+      --muted:#898781; --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,0.10);
+      --series-1:#3987e5; --series-2:#d95926; --good:#0ca30c;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--page); color:var(--text-primary);
+         font-family:system-ui,-apple-system,"Segoe UI",sans-serif; line-height:1.55; font-size:15px; }
+  .wrap { max-width:980px; margin:0 auto; padding:40px 24px 72px; }
+  header.doc { border-bottom:1px solid var(--border); padding-bottom:20px; margin-bottom:28px; }
+  .eyebrow { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 6px; }
+  h1 { font-size:28px; line-height:1.2; margin:0 0 8px; font-weight:650; }
+  .sub { color:var(--text-secondary); margin:0; font-size:14px; }
+  h2 { font-size:19px; margin:40px 0 4px; font-weight:640; }
+  .note { color:var(--text-secondary); font-size:14px; margin:0 0 16px; }
+  p { color:var(--text-secondary); }
+  p strong, li strong { color:var(--text-primary); }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin:20px 0 8px; }
+  .tile { background:var(--surface-1); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+  .tile .lab { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+  .tile .val { font-size:25px; font-weight:640; margin-top:4px; letter-spacing:-.01em; }
+  .tile .delta { font-size:13px; color:var(--good); margin-top:2px; }
+  .tile .delta.neutral { color:var(--text-secondary); }
+  figure { margin:18px 0 8px; background:var(--surface-1); border:1px solid var(--border);
+           border-radius:10px; padding:18px 18px 12px; }
+  figcaption { font-size:15px; font-weight:600; margin-bottom:2px; }
+  .figsub { font-size:13px; color:var(--muted); margin-bottom:12px; }
+  svg { display:block; width:100%; height:auto; overflow:visible; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:13px; color:var(--text-secondary); margin:10px 0 2px; }
+  .legend span.k { display:inline-flex; align-items:center; gap:7px; }
+  .legend i { width:11px; height:11px; border-radius:3px; display:inline-block; }
+  .tick { fill:var(--muted); font-size:11.5px; font-variant-numeric:tabular-nums; }
+  .dlabel { fill:var(--text-secondary); font-size:11.5px; font-variant-numeric:tabular-nums; }
+  .gridline { stroke:var(--grid); stroke-width:1; }
+  .baseline { stroke:var(--axis); stroke-width:1; }
+  table { border-collapse:collapse; width:100%; font-size:14px; margin:10px 0 4px; }
+  th, td { text-align:right; padding:7px 10px; border-bottom:1px solid var(--border); }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  td { font-variant-numeric:tabular-nums; color:var(--text-secondary); }
+  td:first-child { color:var(--text-primary); }
+  tbody tr:last-child td { border-bottom:none; }
+  details { margin:8px 0 0; }
+  summary { cursor:pointer; font-size:13px; color:var(--muted); }
+  ul { color:var(--text-secondary); padding-left:20px; }
+  li { margin-bottom:6px; }
+  .flag { background:var(--surface-1); border:1px solid var(--border); border-left:3px solid var(--series-2);
+          border-radius:8px; padding:12px 16px; font-size:14px; color:var(--text-secondary); margin:16px 0; }
+  footer { margin-top:44px; padding-top:16px; border-top:1px solid var(--border); font-size:12.5px; color:var(--muted); }
+  #tip { position:fixed; pointer-events:none; opacity:0; transition:opacity .08s; background:var(--surface-1);
+         color:var(--text-primary); border:1px solid var(--border); border-radius:8px; padding:8px 11px;
+         font-size:12.5px; box-shadow:0 6px 20px rgba(0,0,0,.14); font-variant-numeric:tabular-nums;
+         z-index:40; max-width:260px; }
+  #tip b { display:block; font-size:12px; color:var(--muted); font-weight:600; margin-bottom:3px; }
+  #tip .row { display:flex; align-items:center; gap:7px; }
+  #tip i { width:9px; height:9px; border-radius:2px; display:inline-block; }
+  .hit { fill:transparent; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="doc">
+    <p class="eyebrow" id="eyebrow"></p>
+    <h1 id="title"></h1>
+    <p class="sub" id="subtitle"></p>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <h2>1. Evolución mensual</h2>
+  <p class="note" id="s1"></p>
+  <figure>
+    <figcaption id="f1cap"></figcaption>
+    <div class="figsub">Millones de pesos corrientes</div>
+    <div id="c1"></div>
+    <div class="legend" id="l1"></div>
+    <details><summary>Ver tabla</summary>
+      <table><thead><tr><th>Mes</th><th>Actual</th><th>Año previo</th><th>Var.</th></tr></thead>
+      <tbody id="t1"></tbody></table>
+    </details>
+  </figure>
+  <figure>
+    <figcaption>Volumen de prácticas realizadas</figcaption>
+    <div class="figsub" id="f2sub"></div>
+    <div id="c2"></div>
+    <div class="legend" id="l2"></div>
+  </figure>
+  <figure>
+    <figcaption>Ticket promedio por práctica</figcaption>
+    <div class="figsub">Facturado ÷ cantidad, en pesos corrientes</div>
+    <div id="c3"></div>
+  </figure>
+  <p id="s1b"></p>
+  <div class="flag">Los importes son <strong>pesos corrientes sin ajustar por inflación</strong>. La base no
+    almacena moneda ni índice de referencia, así que las variaciones nominales de arriba no equivalen a
+    crecimiento real. Para leer el período en términos reales hay que deflactar con IPC externo.</div>
+
+  <h2>2. Composición: trabajo propio vs. derivaciones</h2>
+  <p class="note" id="s2"></p>
+  <figure>
+    <figcaption>Facturación mensual por tipo de trabajo</figcaption>
+    <div class="figsub">Millones de pesos · barras apiladas</div>
+    <div id="c4"></div>
+    <div class="legend">
+      <span class="k"><i style="background:var(--series-1)"></i>Trabajo propio</span>
+      <span class="k"><i style="background:var(--series-2)"></i>Derivaciones</span>
+    </div>
+  </figure>
+
+  <h2>3. Prácticas que más facturan</h2>
+  <p class="note" id="s3"></p>
+  <figure>
+    <figcaption>Top 10 prácticas por facturación</figcaption>
+    <div class="figsub" id="f5sub"></div>
+    <div id="c5"></div>
+  </figure>
+  <details open><summary>Detalle con volumen y precio implícito</summary>
+    <table><thead><tr><th>Práctica</th><th>Cantidad</th><th>Facturado</th><th>$ / unidad</th><th>% total</th></tr></thead>
+    <tbody id="t5"></tbody></table>
+  </details>
+  <p id="s3b"></p>
+
+  <h2>4. Obras sociales</h2>
+  <p class="note" id="s4head"></p>
+  <figure>
+    <figcaption>Top 10 obras sociales por facturación</figcaption>
+    <div class="figsub" id="f6sub"></div>
+    <div id="c6"></div>
+  </figure>
+  <p id="s4"></p>
+
+  <h2>5. Sedes</h2>
+  <p class="note" id="s5"></p>
+  <table><thead><tr><th>Sede</th><th>Cantidad</th><th>Facturado</th><th>% total</th></tr></thead>
+  <tbody id="t7"></tbody></table>
+
+  <h2>6. Conclusiones y puntos de atención</h2>
+  <ul id="concl"></ul>
+
+  <footer id="foot"></footer>
+</div>
+<div id="tip"></div>
+
+<script>
+const DATA = __DATA__;
+
+/* ============================================================================
+   ============================================================================
+   RENDER — no tocar nada debajo de esta línea. Ni un carácter.
+   ==========================================================================*/
+(function(){
+  const S1='var(--series-1)', S2='var(--series-2)';
+  const D=DATA, N=D.months.length;
+  const hasPrev = Array.isArray(D.billedPrev) && Array.isArray(D.qtyPrev);
+  const sum=a=>a.reduce((x,y)=>x+y,0);
+  const T={ billed:sum(D.billed), qty:sum(D.qty),
+            billedPrev:hasPrev?sum(D.billedPrev):null, qtyPrev:hasPrev?sum(D.qtyPrev):null,
+            derived:sum(D.derived) };
+  const ticket=D.months.map((m,i)=>D.billed[i]/D.qty[i]);
+
+  const nf =n=>n.toLocaleString('es-AR',{maximumFractionDigits:0});
+  const M  =n=>(n/1e6).toLocaleString('es-AR',{maximumFractionDigits:0});
+  const M1 =n=>(n/1e6).toLocaleString('es-AR',{maximumFractionDigits:1});
+  const pct=n=>n.toLocaleString('es-AR',{minimumFractionDigits:1,maximumFractionDigits:1})+' %';
+  const dlt=(a,b)=>(b?(a/b-1)*100:0);
+  const el=(t,a)=>{const e=document.createElementNS('http://www.w3.org/2000/svg',t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+  const set=(id,html)=>{const n=document.getElementById(id); if(n) n.innerHTML=html;};
+
+  // header
+  set('eyebrow', `OptaCost · ${D.schema}`);
+  set('title',   `Informe de facturación — ${D.periodLabel}`);
+  set('subtitle',`Actividad efectivamente realizada y facturada, por mes, práctica, obra social y sede.` +
+    (hasPrev?` Comparación contra el mismo período de ${D.yearPrev}.`:'') +
+    ` Fuente: tabla <code>reportings</code>, ${nf(D.counts.filas)} registros del período.`);
+  set('f1cap', hasPrev?`Facturación mensual, ${D.yearCurr} vs. ${D.yearPrev}`:'Facturación mensual');
+  set('f2sub', hasPrev?`Unidades por mes · ${D.yearCurr} vs. ${D.yearPrev}`:'Unidades por mes');
+  set('f5sub', `Millones de pesos · ${D.periodLabel.toLowerCase()}`);
+  set('f6sub', `Millones de pesos · ${D.periodLabel.toLowerCase()}`);
+  const lg = `<span class="k"><i style="background:var(--series-1)"></i>${D.yearCurr}</span>` +
+             `<span class="k"><i style="background:var(--series-2)"></i>${D.yearPrev}</span>`;
+  if(hasPrev){ set('l1',lg); set('l2',lg); }
+
+  // tiles
+  const tile=(lab,val,delta,neutral)=>`<div class="tile"><div class="lab">${lab}</div>`+
+    `<div class="val">${val}</div><div class="delta${neutral?' neutral':''}">${delta}</div></div>`;
+  const arrow=v=>(v>=0?'▲':'▼')+' '+pct(Math.abs(v));
+  document.getElementById('tiles').innerHTML =
+    tile(`Facturado ${D.currLabel}`, `$${M(T.billed)} M`,
+         hasPrev?`${arrow(dlt(T.billed,T.billedPrev))} vs ${D.prevLabel}`:'s/d período previo', !hasPrev) +
+    tile('Prácticas realizadas', nf(T.qty),
+         hasPrev?`${arrow(dlt(T.qty,T.qtyPrev))} vs ${D.prevLabel}`:'s/d período previo', !hasPrev) +
+    tile('Ticket promedio', `$${nf(T.billed/T.qty)}`,
+         hasPrev?`${arrow(dlt(T.billed/T.qty,T.billedPrev/T.qtyPrev))} vs ${D.prevLabel}`:'s/d período previo', !hasPrev) +
+    tile('Derivaciones', pct(T.derived/T.billed*100), `$${M(T.derived)} M facturados`, true);
+
+  // narrative
+  ['s1','s1b','s2','s3','s3b','s4head','s4','s5'].forEach(k=>set(k, D.narrative[k]||''));
+  document.getElementById('concl').innerHTML =
+    D.narrative.conclusions.map(c=>`<li><strong>${c.t}</strong> ${c.b}</li>`).join('');
+  set('foot', `Elaborado el ${D.generated} a partir de la base OptaCost, esquema <code>${D.schema}</code>, ` +
+    `tabla <code>reportings</code> (${D.rangeNote}). Consultas de sólo lectura. ` +
+    `Importes en pesos corrientes, sin ajuste por inflación.`);
+
+  // tooltip
+  const tip=document.getElementById('tip');
+  function hook(node,html){
+    node.addEventListener('mousemove',e=>{ tip.innerHTML=html; tip.style.opacity=1;
+      tip.style.left=Math.min(e.clientX+14,window.innerWidth-tip.offsetWidth-10)+'px';
+      tip.style.top=(e.clientY-12)+'px'; });
+    node.addEventListener('mouseleave',()=>tip.style.opacity=0);
+  }
+  const niceMax=v=>{const p=Math.pow(10,Math.floor(Math.log10(v)));return Math.ceil(v/(p/2))*(p/2);};
+  const rr=(x,y,w,h,r)=>{r=Math.min(r,h,w/2);return `M${x},${y+h} L${x},${y+r} Q${x},${y} ${x+r},${y} L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z`;};
+  const rrH=(x,y,w,h,r)=>{r=Math.min(r,w,h/2);return `M${x},${y} L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h-r} Q${x+w},${y+h} ${x+w-r},${y+h} L${x},${y+h} Z`;};
+
+  function vbars(host,o){
+    const W=880,H=o.h||300,L=o.left||58,R=14,T0=18,B=34;
+    const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':o.label});
+    const iw=W-L-R, ih=H-T0-B, max=niceMax(o.max), y=v=>T0+ih-(v/max)*ih;
+    for(let i=0;i<=4;i++){ const v=max*i/4;
+      svg.appendChild(el('line',{class:'gridline',x1:L,x2:W-R,y1:y(v),y2:y(v)}));
+      const t=el('text',{class:'tick',x:L-9,y:y(v)+4,'text-anchor':'end'}); t.textContent=o.fmtAxis(v); svg.appendChild(t); }
+    svg.appendChild(el('line',{class:'baseline',x1:L,x2:W-R,y1:y(0),y2:y(0)}));
+    const slot=iw/o.groups.length, pad=slot*0.22;
+    o.groups.forEach((g,i)=>{
+      const gx=L+i*slot+pad, gw=slot-pad*2;
+      const lx=el('text',{class:'tick',x:gx+gw/2,y:H-B+20,'text-anchor':'middle'}); lx.textContent=g.label; svg.appendChild(lx);
+      if(o.stacked){ let acc=0;
+        g.values.forEach((v,k)=>{ const y0=y(acc),y1=y(acc+v), h=Math.max(0,y0-y1-(k?2:0));
+          svg.appendChild(el('path',{d:rr(gx,y1,gw,h,k===g.values.length-1?4:0),fill:o.colors[k]})); acc+=v; });
+      } else { const bw=(gw-6)/g.values.length;
+        g.values.forEach((v,k)=>{ const bx=gx+k*(bw+(g.values.length>1?6:0));
+          svg.appendChild(el('path',{d:rr(bx,y(v),bw,y(0)-y(v),4),fill:o.colors[k]})); }); }
+      if(o.topLabel){ const t=el('text',{class:'dlabel',x:gx+gw/2,y:y(g.total)-8,'text-anchor':'middle'});
+        t.textContent=o.topLabel(g); svg.appendChild(t); }
+      const hit=el('rect',{class:'hit',x:L+i*slot,y:T0,width:slot,height:ih}); hook(hit,o.tip(g)); svg.appendChild(hit);
+    });
+    host.appendChild(svg);
+  }
+
+  function line(host,o){
+    const W=880,H=250,L=58,R=42,T0=20,B=34;
+    const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':o.label});
+    const iw=W-L-R, ih=H-T0-B, max=o.max, min=o.min;
+    const y=v=>T0+ih-((v-min)/(max-min))*ih, x=i=>L+(iw/(o.points.length-1||1))*i;
+    for(let i=0;i<=4;i++){ const v=min+(max-min)*i/4;
+      svg.appendChild(el('line',{class:'gridline',x1:L,x2:W-R,y1:y(v),y2:y(v)}));
+      const t=el('text',{class:'tick',x:L-9,y:y(v)+4,'text-anchor':'end'}); t.textContent=o.fmtAxis(v); svg.appendChild(t); }
+    let d=''; o.points.forEach((p,i)=>d+=(i?'L':'M')+x(i)+','+y(p.v));
+    svg.appendChild(el('path',{d,fill:'none',stroke:S1,'stroke-width':2,'stroke-linejoin':'round','stroke-linecap':'round'}));
+    o.points.forEach((p,i)=>{
+      svg.appendChild(el('circle',{cx:x(i),cy:y(p.v),r:5,fill:S1,stroke:'var(--surface-1)','stroke-width':2}));
+      const lx=el('text',{class:'tick',x:x(i),y:H-B+20,'text-anchor':'middle'}); lx.textContent=p.label; svg.appendChild(lx);
+      if(i===0||i===o.points.length-1){ const vl=el('text',{class:'dlabel',x:x(i),y:y(p.v)-13,'text-anchor':i?'end':'start'});
+        vl.textContent=o.fmtLabel(p.v); svg.appendChild(vl); }
+      const hit=el('rect',{class:'hit',x:x(i)-iw/(2*o.points.length),y:T0,width:iw/o.points.length,height:ih});
+      hook(hit,o.tip(p)); svg.appendChild(hit);
+    });
+    host.appendChild(svg);
+  }
+
+  function hbars(host,rows,fmt,tipf){
+    const rowH=30,W=880,L=210,R=70,T0=6, H=T0+rows.length*rowH+8;
+    const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,role:'img'});
+    const max=Math.max(...rows.map(r=>r.v)), iw=W-L-R;
+    rows.forEach((r,i)=>{
+      const y=T0+i*rowH;
+      const lb=el('text',{class:'tick',x:L-12,y:y+18,'text-anchor':'end',fill:'var(--text-secondary)','font-size':'12.5'});
+      lb.textContent=r.label; svg.appendChild(lb);
+      const w=(r.v/max)*iw;
+      svg.appendChild(el('path',{d:rrH(L,y+5,w,18,4),fill:S1}));
+      const vl=el('text',{class:'dlabel',x:L+w+9,y:y+19}); vl.textContent=fmt(r.v); svg.appendChild(vl);
+      const hit=el('rect',{class:'hit',x:0,y:y,width:W,height:rowH}); hook(hit,tipf(r)); svg.appendChild(hit);
+    });
+    host.appendChild(svg);
+  }
+
+  // 1 · facturación mensual
+  vbars(document.getElementById('c1'),{
+    label:'Facturación mensual', max:Math.max(...D.billed), colors:[S1,S2],
+    groups:D.months.map((m,i)=>({label:m, values:hasPrev?[D.billed[i],D.billedPrev[i]]:[D.billed[i]], total:D.billed[i]})),
+    fmtAxis:v=>'$'+M(v)+' M', topLabel:g=>M(g.values[0]),
+    tip:g=>`<b>${g.label}</b><div class="row"><i style="background:${S1}"></i>${D.yearCurr} <strong>$${M1(g.values[0])} M</strong></div>`+
+      (hasPrev?`<div class="row"><i style="background:${S2}"></i>${D.yearPrev} $${M1(g.values[1])} M</div>`+
+       `<div style="margin-top:4px;color:var(--good)">${arrow(dlt(g.values[0],g.values[1]))} interanual</div>`:'')
+  });
+  document.getElementById('t1').innerHTML =
+    D.months.map((m,i)=>`<tr><td>${m}</td><td>$${nf(D.billed[i])}</td>`+
+      `<td>${hasPrev?'$'+nf(D.billedPrev[i]):'—'}</td>`+
+      `<td>${hasPrev?arrow(dlt(D.billed[i],D.billedPrev[i])):'—'}</td></tr>`).join('') +
+    `<tr><td><strong>Total</strong></td><td><strong>$${nf(T.billed)}</strong></td>`+
+    `<td>${hasPrev?'$'+nf(T.billedPrev):'—'}</td><td>${hasPrev?arrow(dlt(T.billed,T.billedPrev)):'—'}</td></tr>`;
+
+  // 2 · volumen
+  vbars(document.getElementById('c2'),{
+    label:'Volumen mensual', h:250, max:Math.max(...D.qty), colors:[S1,S2],
+    groups:D.months.map((m,i)=>({label:m, values:hasPrev?[D.qty[i],D.qtyPrev[i]]:[D.qty[i]], total:D.qty[i]})),
+    fmtAxis:v=>nf(v), topLabel:g=>nf(g.values[0]),
+    tip:g=>`<b>${g.label}</b><div class="row"><i style="background:${S1}"></i>${D.yearCurr} <strong>${nf(g.values[0])}</strong></div>`+
+      (hasPrev?`<div class="row"><i style="background:${S2}"></i>${D.yearPrev} ${nf(g.values[1])}</div>`+
+       `<div style="margin-top:4px;color:var(--text-secondary)">${arrow(dlt(g.values[0],g.values[1]))} interanual</div>`:'')
+  });
+
+  // 3 · ticket promedio
+  const tmin=Math.min(...ticket), tmax=Math.max(...ticket), pad=(tmax-tmin)*0.35||tmax*0.1;
+  const rawLo=Math.max(0,tmin-pad), rawHi=tmax+pad,
+        st=Math.pow(10,Math.floor(Math.log10(rawHi-rawLo)))/2,
+        tLo=Math.floor(rawLo/st)*st, tHi=Math.ceil(rawHi/st)*st;
+  line(document.getElementById('c3'),{
+    label:'Ticket promedio', min:tLo, max:tHi,
+    points:D.months.map((m,i)=>({label:m, v:ticket[i], q:D.qty[i]})),
+    fmtAxis:v=>'$'+nf(v), fmtLabel:v=>'$'+nf(v),
+    tip:p=>`<b>${p.label}</b><strong>$${nf(p.v)}</strong> por práctica<div style="color:var(--text-secondary)">${nf(p.q)} prácticas</div>`
+  });
+
+  // 4 · propio vs derivado
+  vbars(document.getElementById('c4'),{
+    label:'Facturación por tipo de trabajo', h:290, stacked:true, colors:[S1,S2],
+    max:Math.max(...D.months.map((m,i)=>D.own[i]+D.derived[i])),
+    groups:D.months.map((m,i)=>({label:m, values:[D.own[i],D.derived[i]], total:D.own[i]+D.derived[i]})),
+    fmtAxis:v=>'$'+M(v)+' M', topLabel:g=>M(g.total),
+    tip:g=>`<b>${g.label}</b><div class="row"><i style="background:${S1}"></i>Propio <strong>$${M1(g.values[0])} M</strong></div>`+
+      `<div class="row"><i style="background:${S2}"></i>Derivado $${M1(g.values[1])} M (${pct(g.values[1]/g.total*100)})</div>`
+  });
+
+  // 5 · top prácticas
+  hbars(document.getElementById('c5'),
+    D.practices.map(p=>({label:p[0], v:p[2], q:p[1]})), v=>'$'+M(v)+' M',
+    r=>`<b>${r.label}</b><strong>$${M1(r.v)} M</strong> facturados<div style="color:var(--text-secondary)">`+
+       `${nf(r.q)} unidades · $${nf(r.v/r.q)} c/u · ${pct(r.v/T.billed*100)} del total</div>`);
+  document.getElementById('t5').innerHTML = D.practices.map(p=>
+    `<tr><td>${p[0]}</td><td>${nf(p[1])}</td><td>$${nf(p[2])}</td><td>$${nf(p[2]/p[1])}</td><td>${pct(p[2]/T.billed*100)}</td></tr>`).join('');
+
+  // 6 · obras sociales
+  hbars(document.getElementById('c6'),
+    D.insurers.map(o=>({label:o[0], v:o[1]})), v=>'$'+M(v)+' M',
+    r=>`<b>${r.label}</b><strong>$${M1(r.v)} M</strong> facturados<div style="color:var(--text-secondary)">${pct(r.v/T.billed*100)} del total</div>`);
+
+  // sedes
+  document.getElementById('t7').innerHTML = D.sites.map(s=>
+    `<tr><td>${s[0]}</td><td>${nf(s[1])}</td><td>$${nf(s[2])}</td><td>${pct(s[2]/T.billed*100)}</td></tr>`).join('');
+})();
+</script>
+</body>
+</html>

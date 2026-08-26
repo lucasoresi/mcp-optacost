@@ -5,7 +5,8 @@ description: >-
   database and when to use each. Load this first to route a question to the
   right domain Skill. Covers supplies/procurement, practice pricing, price
   benchmarking, cost composition, health insurers (OS), billing/reporting,
-  indirect costs, clients/tenancy, and platform/system.
+  indirect costs, clients/tenancy, and platform/system. Also lists the output
+  Skills (fixed-format deliverables such as the billing report).
 ---
 
 # Database Domains — Index
@@ -87,6 +88,18 @@ pricing & margins → billing/reporting of what was actually performed and bille
   materialized-view refresh orchestration, backups, comments/notifications, AI
   assistant chat history and vector embeddings. Tables: `jobs`, `refresh_jobs`,
   `backups`, `comments`, `n8n_chat_histories`, `embeddings`.
+
+## Output Skills (fixed-format deliverables)
+
+These are not domains: they are frozen templates for something the user asks to
+be *produced*. Load one **in addition to** the domain Skill it draws on.
+
+- **Informe de facturación** (`billing-report`) — the standard billing report:
+  a self-contained HTML deliverable with a fixed 6-section structure, 4 KPI
+  tiles and 6 charts. Load it whenever someone asks for an *informe* / *reporte*
+  / *report* of facturación, ingresos or billing for a range of months, so every
+  report comes out with the same structure and only the data changes. Draws on
+  `billing-reporting`.
 
 ## Cross-domain notes
 - **Practice code** is the backbone identifier linking Pricing, Cost
