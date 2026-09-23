@@ -9,7 +9,7 @@ function withEnv(env: Record<string, string | undefined>, fn: () => void) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  try { fn(); } finally { Object.assign(process.env, prev); }
+  try { fn(); } finally { process.env = prev; }
 }
 
 const base = { PUBLIC_URL: 'https://x.test', PGHOST: 'h', PGDATABASE: 'd' };
