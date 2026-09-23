@@ -237,12 +237,12 @@ export function mountOAuth(
       }
       if (!ok) return fail("Usuario o contraseña incorrectos.");
 
-      const lookupDb = new Db({
-        pool: pools.getBootstrapPool(),
-        statementTimeoutMs: cfg.statementTimeoutMs,
-        assumeRole: null,
-      });
       try {
+        const lookupDb = new Db({
+          pool: pools.getBootstrapPool(),
+          statementTimeoutMs: cfg.statementTimeoutMs,
+          assumeRole: null,
+        });
         resolvedUsername = await resolveTenantRole(input, (sql, params) =>
           lookupDb.catalogQuery<TenantLookupRow>(sql, params),
         );
