@@ -16,7 +16,7 @@
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "test:unit": "tsx --test tests/guard.test.ts",
+    "test:unit": "tsx --test tests/guard.test.ts tests/config.test.ts tests/email-auth.test.ts",
     "test:integration": "tsx --test tests/integration.test.ts"
   },
   "dependencies": {
