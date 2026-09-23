@@ -49,3 +49,49 @@ test('verifyPassword: error de red => lanza', async () => {
   const boom = (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch;
   await assert.rejects(verifyPassword({ ...creds, fetchImpl: boom }));
 });
+
+import { tenantRoleFromRows, resolveTenantRole, TENANT_LOOKUP_SQL } from '../src/email-auth.js';
+import type { TenantLookupRow } from '../src/email-auth.js';
+
+const okRow: TenantLookupRow = {
+  subdomain: 'iaca', user_status: 'active', client_status: 'active',
+  deleted_at: null, role_exists: true,
+};
+
+test('tenantRoleFromRows: fila válida => subdomain', () => {
+  assert.equal(tenantRoleFromRows([okRow]), 'iaca');
+});
+
+test('tenantRoleFromRows: sin filas => no_user', () => {
+  assert.throws(() => tenantRoleFromRows([]), (e) => e instanceof EmailLoginError && e.reason === 'no_user');
+});
+
+test('tenantRoleFromRows: usuario inactivo => inactive', () => {
+  assert.throws(() => tenantRoleFromRows([{ ...okRow, user_status: 'disabled' }]),
+    (e) => e instanceof EmailLoginError && e.reason === 'inactive');
+});
+
+test('tenantRoleFromRows: cliente borrado => inactive', () => {
+  assert.throws(() => tenantRoleFromRows([{ ...okRow, deleted_at: '2020-01-01' }]),
+    (e) => e instanceof EmailLoginError && e.reason === 'inactive');
+});
+
+test('tenantRoleFromRows: sin rol de Postgres => no_tenant_role', () => {
+  assert.throws(() => tenantRoleFromRows([{ ...okRow, role_exists: false }]),
+    (e) => e instanceof EmailLoginError && e.reason === 'no_tenant_role');
+});
+
+test('resolveTenantRole: pasa el email al runner y devuelve el rol', async () => {
+  let seen: unknown[] = [];
+  const runner = async (_sql: string, params: unknown[]) => { seen = params; return [okRow]; };
+  const role = await resolveTenantRole('A@B.com', runner);
+  assert.equal(role, 'iaca');
+  assert.deepEqual(seen, ['A@B.com']);
+});
+
+test('TENANT_LOOKUP_SQL usa lower() y tablas public calificadas', () => {
+  assert.match(TENANT_LOOKUP_SQL, /lower\(u\.email\)/i);
+  assert.match(TENANT_LOOKUP_SQL, /public\.users/i);
+  assert.match(TENANT_LOOKUP_SQL, /public\.clients/i);
+  assert.match(TENANT_LOOKUP_SQL, /pg_roles/i);
+});

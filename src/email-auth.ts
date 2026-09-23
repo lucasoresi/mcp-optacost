@@ -60,3 +60,49 @@ export async function verifyPassword(opts: {
   if (res.status === 400 || res.status === 401) return false;
   throw new Error(`Supabase Auth respondió con status ${res.status}`);
 }
+
+export type TenantLookupRow = {
+  subdomain: string;
+  user_status: string;
+  client_status: string;
+  deleted_at: string | null;
+  role_exists: boolean;
+};
+
+/**
+ * Una fila (o ninguna) con el subdomain del cliente del usuario, su estado, y
+ * si existe un rol de Postgres homónimo. `lower(u.email)` hace el match
+ * case-insensitive. Nombres calificados a `public` porque corre como bootstrap
+ * sin search_path de tenant.
+ */
+export const TENANT_LOOKUP_SQL = `
+  SELECT c.subdomain,
+         u.status AS user_status,
+         c.status::text AS client_status,
+         c.deleted_at,
+         EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = c.subdomain) AS role_exists
+  FROM public.users u
+  JOIN public.clients c ON c.id = u.client_id
+  WHERE lower(u.email) = lower($1)
+  LIMIT 1
+`;
+
+/** Traduce el resultado del lookup a un nombre de rol, o lanza EmailLoginError. */
+export function tenantRoleFromRows(rows: TenantLookupRow[]): string {
+  const row = rows[0];
+  if (!row) throw new EmailLoginError("no_user");
+  if (row.deleted_at !== null || row.user_status !== "active" || row.client_status !== "active") {
+    throw new EmailLoginError("inactive");
+  }
+  if (!row.role_exists) throw new EmailLoginError("no_tenant_role");
+  return row.subdomain;
+}
+
+/** Corre el lookup con el runner inyectado (bootstrap pool) y resuelve el rol. */
+export async function resolveTenantRole(
+  email: string,
+  runCatalog: (sql: string, params: unknown[]) => Promise<TenantLookupRow[]>,
+): Promise<string> {
+  const rows = await runCatalog(TENANT_LOOKUP_SQL, [email]);
+  return tenantRoleFromRows(rows);
+}
