@@ -28,3 +28,35 @@ export function emailLoginErrorMessage(reason: EmailLoginError["reason"]): strin
       return "Usuario o contraseña incorrectos.";
   }
 }
+
+/**
+ * Valida email/password contra GoTrue. No devuelve ni guarda el token de
+ * Supabase — solo confirma que la credencial es válida. Un 400/401 es
+ * "credenciales incorrectas"; una red caída o un status inesperado se propagan
+ * como error para no confundir un problema de infra con una contraseña mala.
+ */
+export async function verifyPassword(opts: {
+  supabaseUrl: string;
+  anonKey: string;
+  email: string;
+  password: string;
+  fetchImpl?: typeof fetch;
+}): Promise<boolean> {
+  const doFetch = opts.fetchImpl ?? fetch;
+  const url = `${opts.supabaseUrl.replace(/\/+$/, "")}/auth/v1/token?grant_type=password`;
+  let res: Response;
+  try {
+    res = await doFetch(url, {
+      method: "POST",
+      headers: { apikey: opts.anonKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ email: opts.email, password: opts.password }),
+    });
+  } catch (e) {
+    throw new Error(
+      `No se pudo contactar a Supabase Auth: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  if (res.status === 200) return true;
+  if (res.status === 400 || res.status === 401) return false;
+  throw new Error(`Supabase Auth respondió con status ${res.status}`);
+}
