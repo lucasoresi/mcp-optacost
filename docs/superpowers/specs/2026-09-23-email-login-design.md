@@ -27,7 +27,7 @@ El login por rol de Postgres **sigue funcionando** — la feature convive con é
 | Validación de contraseña | API de GoTrue: `POST {SUPABASE_URL}/auth/v1/token?grant_type=password`. Reusa bcrypt, rate-limit, lockout y confirmación de email de Supabase. |
 | Origen del mapeo email→tenant | `public.users` + `public.clients.subdomain` (= nombre del rol). Un tenant por usuario. Cubre a todos los usuarios. |
 | Contenido del token OAuth | Solo el rol resuelto (ej. `iaca`), igual que hoy. El email va únicamente a log de servidor, no se persiste en el token store. |
-| Prerrequisito operativo | `GRANT SELECT ON public.users, public.clients TO mcp_bootstrap` (acotado a esas dos tablas de mapeo global). |
+| Prerrequisito operativo | `GRANT SELECT ON public.users, public.clients TO mcp_bootstrap` (acotado a esas dos tablas de mapeo global). **Si esas tablas tienen RLS activo (default en Supabase), además una policy `FOR SELECT TO mcp_bootstrap USING (true)` en cada una** — el GRANT no alcanza porque `mcp_bootstrap` no tiene `BYPASSRLS`. |
 | Basic Auth (editores) | Sin cambios. El login por email es solo del flujo OAuth. |
 
 ## Arquitectura
@@ -84,7 +84,7 @@ Los casos `no_user`/`inactive` devuelven el mismo mensaje que una contraseña ma
 - **La frontera de seguridad sigue siendo Postgres.** El login por email solo elige *qué rol asumir*; el aislamiento entre tenants lo siguen garantizando los `GRANT`s del rol, la auditoría (`audit.ts`) y `SET ROLE`. Un bug en el mapeo podría mandar a alguien al tenant equivocado, pero nunca darle privilegios que el rol no tenga.
 - **Cache de `IdentityContextCache`:** en modo `assume` la clave es `assume:<rol>`. Varios emails del mismo tenant comparten el mismo `ToolContext` (mismo tenant read-only) — correcto, y cada uno pasó GoTrue antes. La preocupación de "password load-bearing en la clave" del modo `direct` no aplica: acá la contraseña se valida en GoTrue *antes* de tocar el cache.
 - **La contraseña del email nunca se guarda** (igual que hoy con la de Postgres). El token de Supabase que devuelve GoTrue se descarta.
-- **`GRANT SELECT` a `mcp_bootstrap`** se limita a `public.users` y `public.clients`. `mcp_bootstrap` sigue siendo `NOINHERIT`; esto no cambia lo que un tenant puede leer (los tenants no asumen bootstrap).
+- **`GRANT SELECT` a `mcp_bootstrap`** se limita a `public.users` y `public.clients`. `mcp_bootstrap` sigue siendo `NOINHERIT`; esto no cambia lo que un tenant puede leer (los tenants no asumen bootstrap). **Nota (descubierto en pruebas):** si esas tablas tienen RLS activo, el `GRANT` no basta — RLS filtra las filas y el lookup ve 0 filas (login falla con "Usuario o contraseña incorrectos"). Hace falta además una policy `FOR SELECT TO mcp_bootstrap USING (true)` en cada tabla, ya que `mcp_bootstrap` no tiene `BYPASSRLS` (a propósito).
 
 ## Testing
 
