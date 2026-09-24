@@ -23,6 +23,38 @@ El problema: ChatGPT y Claude (web/desktop) **solo hablan OAuth**; no mandan usu
 
 ---
 
+## Login por email
+
+El formulario OAuth acepta **usuario de Postgres o email de la app** (se detecta automáticamente por la presencia de `@`). Si configurás `SUPABASE_URL` y `SUPABASE_ANON_KEY`, también podés entrar con el email registrado en Supabase Auth.
+
+El flujo para email funciona así:
+1. Validás el email contra Supabase Auth (GoTrue).
+2. El servidor mapea `email → public.users.client_id` (tabla global de usuarios).
+3. Luego mapea `client_id → clients.subdomain` (la tabla de clientes).
+4. El subdomain es el rol de tenant homónimo en Postgres, y se usa con `SET ROLE` como siempre.
+
+**Prerequisito operativo:** mcp_bootstrap necesita acceso de lectura a las dos tablas de mapeo global. Ejecutá una sola vez en tu base:
+
+```sql
+-- 1) Permiso de tabla
+GRANT SELECT ON public.users, public.clients TO mcp_bootstrap;
+
+-- 2) Si public.users / public.clients tienen RLS activo (por defecto en Supabase),
+--    el GRANT no alcanza: RLS filtra las filas y el lookup ve 0 filas (el login
+--    falla con "Usuario o contraseña incorrectos"). Hace falta además una policy
+--    de lectura para mcp_bootstrap:
+CREATE POLICY mcp_bootstrap_read ON public.users
+  FOR SELECT TO mcp_bootstrap USING (true);
+CREATE POLICY mcp_bootstrap_read ON public.clients
+  FOR SELECT TO mcp_bootstrap USING (true);
+```
+
+Es el **único** acceso directo que necesita mcp_bootstrap fuera de `SET ROLE`, acotado a esas dos tablas de mapeo. El rol sigue siendo `NOINHERIT` (no hereda privilegios propios, solo los del rol que asume) y **no** tiene `BYPASSRLS`; por eso la policy es necesaria cuando RLS está activo. Leer el mapeo es estrictamente menos poderoso que el `SET ROLE` que mcp_bootstrap ya puede hacer a cualquier tenant.
+
+**Caso sin rol homónimo:** si un cliente no tiene un rol de Postgres con el mismo nombre que su subdomain (típico en ambientes de staging o demo), verá el mensaje "Tu organización todavía no tiene acceso al MCP." en la pantalla de login. Es lo esperado: no hay rol que asumir.
+
+---
+
 ## Seguridad de solo lectura (defensa en profundidad)
 
 1. **Permisos del usuario de Postgres** — cada rol ya tiene acceso solo a su schema. Barrera principal, la misma que usás hoy.
@@ -178,6 +210,8 @@ claude mcp add postgres-ro --transport http https://tu-dominio/mcp \
 | `ENABLE_BASIC_AUTH`     | `true`                           | Permitir Basic Auth en `/mcp`.                                |
 | `PORT`                  | `3000`                           | Puerto HTTP.                                                   |
 | `ALLOWED_ORIGINS`       | `claude.ai, chatgpt.com`         | Orígenes CORS.                                                 |
+| `SUPABASE_URL`          | —                                | URL base del proyecto Supabase para validar login por email contra GoTrue. Opcional; ausente ⇒ login por email deshabilitado. |
+| `SUPABASE_ANON_KEY`     | —                                | Anon/publishable key usada como header `apikey` contra GoTrue. Opcional. |
 
 ---
 

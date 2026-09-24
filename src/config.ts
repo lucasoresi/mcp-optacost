@@ -63,6 +63,11 @@ export interface AppConfig {
   allowedOrigins: string[];
   enableBasicAuth: boolean; // permitir Authorization: Basic en /mcp (editores)
   tokenTtlSeconds: number;
+
+  // Supabase Auth (GoTrue) para login por email. Ausentes => login por email
+  // deshabilitado (solo funciona el login por rol de Postgres).
+  supabaseUrl: string | null;
+  supabaseAnonKey: string | null;
 }
 
 export function loadConfig(): AppConfig {
@@ -88,5 +93,7 @@ export function loadConfig(): AppConfig {
     allowedOrigins: list("ALLOWED_ORIGINS", ["https://claude.ai", "https://chatgpt.com"]),
     enableBasicAuth: bool("ENABLE_BASIC_AUTH", true),
     tokenTtlSeconds: int("TOKEN_TTL_SECONDS", 3600),
+    supabaseUrl: process.env.SUPABASE_URL?.trim().replace(/\/+$/, "") || null,
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY?.trim() || null,
   };
 }

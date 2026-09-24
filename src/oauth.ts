@@ -18,6 +18,15 @@ import { readFileSync, writeFileSync } from "node:fs";
 import type { Express, Request, Response } from "express";
 import { AuditFailure, summarizeAuditFailure } from "./audit.js";
 import type { AppConfig } from "./config.js";
+import { Db } from "./db.js";
+import {
+  looksLikeEmail,
+  verifyPassword,
+  resolveTenantRole,
+  EmailLoginError,
+  emailLoginErrorMessage,
+  type TenantLookupRow,
+} from "./email-auth.js";
 import type { IdentityContextCache } from "./identity-context.js";
 import type { PoolRegistry } from "./pool.js";
 
@@ -189,7 +198,7 @@ export function mountOAuth(
     res.send(loginPage({ client_id, redirect_uri, code_challenge, state: state ?? "", error: null }));
   });
 
-  // ── POST /authorize -> valida credenciales de Postgres ──────────
+  // ── POST /authorize -> valida credenciales de Postgres o de email ──────
   app.post("/authorize", async (req: Request, res: Response) => {
     const { client_id, redirect_uri, code_challenge, state, username, password } =
       req.body as Record<string, string>;
@@ -200,29 +209,67 @@ export function mountOAuth(
       return;
     }
 
-    const err = username && password ? await pools.validateCredentials(username, password) : "faltan credenciales";
-    if (err) {
+    const fail = (error: string) => {
       res.status(401).setHeader("Content-Type", "text/html; charset=utf-8");
-      res.send(
-        loginPage({ client_id, redirect_uri, code_challenge, state: state ?? "", error: "Usuario o contraseña incorrectos." }),
-      );
-      return;
+      res.send(loginPage({ client_id, redirect_uri, code_challenge, state: state ?? "", error }));
+    };
+
+    const input = (username ?? "").trim();
+    if (!input || !password) return fail("Usuario o contraseña incorrectos.");
+
+    // Resolvemos el username final (rol de Postgres) por una de las dos vías.
+    let resolvedUsername: string;
+
+    if (looksLikeEmail(input)) {
+      // ── Login por email de la app (Supabase Auth) ──
+      if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) return fail("Usuario o contraseña incorrectos.");
+      let ok: boolean;
+      try {
+        ok = await verifyPassword({
+          supabaseUrl: cfg.supabaseUrl,
+          anonKey: cfg.supabaseAnonKey,
+          email: input,
+          password,
+        });
+      } catch (e) {
+        console.error("[oauth] error contactando Supabase Auth:", e);
+        return fail("No se pudo verificar las credenciales. Intentá de nuevo.");
+      }
+      if (!ok) return fail("Usuario o contraseña incorrectos.");
+
+      try {
+        const lookupDb = new Db({
+          pool: pools.getBootstrapPool(),
+          statementTimeoutMs: cfg.statementTimeoutMs,
+          assumeRole: null,
+        });
+        resolvedUsername = await resolveTenantRole(input, (sql, params) =>
+          lookupDb.catalogQuery<TenantLookupRow>(sql, params),
+        );
+      } catch (e) {
+        if (e instanceof EmailLoginError) return fail(emailLoginErrorMessage(e.reason));
+        console.error("[oauth] error resolviendo tenant por email:", e);
+        return fail("No se pudo verificar las credenciales. Intentá de nuevo.");
+      }
+      console.log(`[oauth] login por email ok: ${input} -> rol ${resolvedUsername}`);
+    } else {
+      // ── Login por rol de Postgres (flujo original) ──
+      const err = await pools.validateCredentials(input, password);
+      if (err) return fail("Usuario o contraseña incorrectos.");
+      resolvedUsername = input;
     }
 
+    // ── Cola compartida: auditoría + emisión del code ──
     // Auditar acá, no sólo al primer /mcp: así la falla se ve en la pantalla
     // de login, no como un error críptico ya "dentro" de ChatGPT.
     try {
-      await identityContexts.get({ mode: "assume", username });
+      await identityContexts.get({ mode: "assume", username: resolvedUsername });
     } catch (auditError) {
       const message =
         auditError instanceof AuditFailure
           ? summarizeAuditFailure(auditError)
           : "No se pudo verificar los permisos de este usuario.";
-      res.status(401).setHeader("Content-Type", "text/html; charset=utf-8");
-      res.send(
-        loginPage({ client_id, redirect_uri, code_challenge, state: state ?? "", error: message }),
-      );
-      return;
+      return fail(message);
     }
 
     const code = rand(24);
@@ -230,7 +277,7 @@ export function mountOAuth(
       clientId: client_id,
       redirectUri: redirect_uri,
       codeChallenge: code_challenge,
-      username,
+      username: resolvedUsername,
       expiresAt: Date.now() + 60_000, // 60s
     });
 
@@ -348,7 +395,7 @@ function loginPage(o: {
   <input type="hidden" name="redirect_uri" value="${escapeHtml(o.redirect_uri)}">
   <input type="hidden" name="code_challenge" value="${escapeHtml(o.code_challenge)}">
   <input type="hidden" name="state" value="${escapeHtml(o.state)}">
-  <label>Usuario</label>
+  <label>Usuario o email</label>
   <input name="username" autocomplete="username" autofocus required>
   <label>Contraseña</label>
   <input name="password" type="password" autocomplete="current-password" required>
