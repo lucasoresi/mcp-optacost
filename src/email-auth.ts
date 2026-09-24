@@ -12,7 +12,7 @@ export function looksLikeEmail(input: string): boolean {
 
 /** Falla de resolución email → tenant, con la causa para elegir el mensaje. */
 export class EmailLoginError extends Error {
-  constructor(public readonly reason: "no_user" | "no_tenant_role" | "inactive") {
+  constructor(public readonly reason: "no_user" | "no_tenant_role" | "inactive" | "ambiguous") {
     super(`email login failed: ${reason}`);
     this.name = "EmailLoginError";
   }
@@ -25,6 +25,7 @@ export function emailLoginErrorMessage(reason: EmailLoginError["reason"]): strin
       return "Tu organización todavía no tiene acceso al MCP.";
     case "no_user":
     case "inactive":
+    case "ambiguous":
       return "Usuario o contraseña incorrectos.";
   }
 }
@@ -70,10 +71,12 @@ export type TenantLookupRow = {
 };
 
 /**
- * Una fila (o ninguna) con el subdomain del cliente del usuario, su estado, y
- * si existe un rol de Postgres homónimo. `lower(u.email)` hace el match
- * case-insensitive. Nombres calificados a `public` porque corre como bootstrap
- * sin search_path de tenant.
+ * Todas las filas (idealmente una sola, o ninguna) con el subdomain del
+ * cliente del usuario, su estado, y si existe un rol de Postgres homónimo.
+ * Sin `LIMIT`: `public.users.email` no tiene constraint UNIQUE, así que
+ * `tenantRoleFromRows` es quien decide qué hacer si hay más de una fila.
+ * `lower(u.email)` hace el match case-insensitive. Nombres calificados a
+ * `public` porque corre como bootstrap sin search_path de tenant.
  */
 export const TENANT_LOOKUP_SQL = `
   SELECT c.subdomain,
@@ -84,13 +87,18 @@ export const TENANT_LOOKUP_SQL = `
   FROM public.users u
   JOIN public.clients c ON c.id = u.client_id
   WHERE lower(u.email) = lower($1)
-  LIMIT 1
 `;
 
-/** Traduce el resultado del lookup a un nombre de rol, o lanza EmailLoginError. */
+/**
+ * Traduce el resultado del lookup a un nombre de rol, o lanza EmailLoginError.
+ * `public.users.email` no tiene constraint UNIQUE (solo PK en `id`), así que
+ * más de una fila para el mismo email es posible aunque no debería pasar hoy.
+ * Ante esa ambigüedad, falla cerrado en vez de tomar `rows[0]` al azar.
+ */
 export function tenantRoleFromRows(rows: TenantLookupRow[]): string {
+  if (rows.length === 0) throw new EmailLoginError("no_user");
+  if (rows.length > 1) throw new EmailLoginError("ambiguous");
   const row = rows[0];
-  if (!row) throw new EmailLoginError("no_user");
   if (row.deleted_at !== null || row.user_status !== "active" || row.client_status !== "active") {
     throw new EmailLoginError("inactive");
   }

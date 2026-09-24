@@ -81,6 +81,27 @@ test('tenantRoleFromRows: sin rol de Postgres => no_tenant_role', () => {
     (e) => e instanceof EmailLoginError && e.reason === 'no_tenant_role');
 });
 
+test('tenantRoleFromRows: cliente suspendido => inactive', () => {
+  assert.throws(() => tenantRoleFromRows([{ ...okRow, client_status: 'suspended' }]),
+    (e) => e instanceof EmailLoginError && e.reason === 'inactive');
+});
+
+test('tenantRoleFromRows: más de una fila => ambiguous (falla cerrado)', () => {
+  assert.throws(() => tenantRoleFromRows([okRow, okRow]),
+    (e) => e instanceof EmailLoginError && e.reason === 'ambiguous');
+});
+
+test('tenantRoleFromRows: dos filas con distinto subdomain => ambiguous', () => {
+  assert.throws(
+    () => tenantRoleFromRows([okRow, { ...okRow, subdomain: 'otro' }]),
+    (e) => e instanceof EmailLoginError && e.reason === 'ambiguous',
+  );
+});
+
+test('emailLoginErrorMessage: ambiguous no filtra la ambigüedad', () => {
+  assert.equal(emailLoginErrorMessage('ambiguous'), 'Usuario o contraseña incorrectos.');
+});
+
 test('resolveTenantRole: pasa el email al runner y devuelve el rol', async () => {
   let seen: unknown[] = [];
   const runner = async (_sql: string, params: unknown[]) => { seen = params; return [okRow]; };
