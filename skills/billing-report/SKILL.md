@@ -72,6 +72,15 @@ Confirm the resolved period back to the user in one line when you deliver, e.g.
 
 Substitute only the dates. Each is a single read-only statement.
 
+Billing rules every query below already applies (same as the platform's
+informes — do not change them):
+- **Facturación** = `billed_amount + coalesce(counter_amount, 0)` (billed to
+  the insurer + collected at the counter / ventanilla).
+- **Derivation** = `coalesce(is_derivation, false) or headquarter = 'Derivantes'`.
+  Totals include derivations; Q2 gives the own / derived breakdown.
+- **Insurers** come from the `report_os` view (only insurers loaded in `os`,
+  amount `total_amount` = billed + counter).
+
 ```sql
 -- Q0. Coverage: which periods exist at all.
 select min(period) as desde, max(period) as hasta, count(*) as filas
@@ -84,7 +93,7 @@ from <schema>.reportings;
 select extract(year from period)::int as anio,
        to_char(period, 'MM')          as mes,
        sum(quantity)                  as qty,
-       round(sum(billed_amount)::numeric, 2) as billed
+       round(sum(billed_amount + coalesce(counter_amount, 0))::numeric, 2) as billed
 from <schema>.reportings
 where (period >= DATE '2026-01-01' and period < DATE '2026-07-01')
    or (period >= DATE '2025-01-01' and period < DATE '2025-07-01')
@@ -95,8 +104,10 @@ order by 1, 2;
 ```sql
 -- Q2. Own work vs derivations, by month (current period only).
 select to_char(period, 'YYYY-MM') as mes,
-       round(sum(billed_amount) filter (where not is_derivation)::numeric, 2) as propio,
-       round(sum(billed_amount) filter (where is_derivation)::numeric, 2)     as derivado
+       round(sum(billed_amount + coalesce(counter_amount, 0))
+             filter (where not (coalesce(is_derivation, false) or headquarter = 'Derivantes'))::numeric, 2) as propio,
+       round(sum(billed_amount + coalesce(counter_amount, 0))
+             filter (where coalesce(is_derivation, false) or headquarter = 'Derivantes')::numeric, 2)     as derivado
 from <schema>.reportings
 where period >= DATE '2026-01-01' and period < DATE '2026-07-01'
 group by 1
@@ -107,7 +118,7 @@ order by 1;
 -- Q3. Top 15 practices by billed amount.
 select practice_name,
        sum(quantity) as qty,
-       round(sum(billed_amount)::numeric, 2) as billed
+       round(sum(billed_amount + coalesce(counter_amount, 0))::numeric, 2) as billed
 from <schema>.reportings
 where period >= DATE '2026-01-01' and period < DATE '2026-07-01'
 group by 1
@@ -116,13 +127,14 @@ limit 15;
 ```
 
 ```sql
--- Q4. Top 15 insurers (obras sociales) by billed amount.
-select coalesce(nullif(os, ''), '(sin dato)') as obra_social,
+-- Q4. Top 15 insurers (obras sociales) by billing — only insurers loaded in
+-- the `os` catalog (view report_os, official name, billed + counter).
+select max(os) as obra_social,
        sum(quantity) as qty,
-       round(sum(billed_amount)::numeric, 2) as billed
-from <schema>.reportings
+       round(sum(total_amount)::numeric, 2) as billed
+from <schema>.report_os
 where period >= DATE '2026-01-01' and period < DATE '2026-07-01'
-group by 1
+group by os_code
 order by billed desc
 limit 15;
 ```
@@ -131,7 +143,7 @@ limit 15;
 -- Q5. All sites (headquarters).
 select coalesce(nullif(headquarter, ''), '(sin dato)') as sede,
        sum(quantity) as qty,
-       round(sum(billed_amount)::numeric, 2) as billed
+       round(sum(billed_amount + coalesce(counter_amount, 0))::numeric, 2) as billed
 from <schema>.reportings
 where period >= DATE '2026-01-01' and period < DATE '2026-07-01'
 group by 1
@@ -146,8 +158,9 @@ where period >= DATE '2026-01-01' and period < DATE '2026-07-01';
 ```
 
 ```sql
--- Q6b. Distinct practices. Run the same shape again for `os`
--- (obras_sociales). The site count comes free from Q5's row count.
+-- Q6b. Distinct practices. For obras_sociales run
+-- `select count(distinct os_code) from <schema>.report_os where <same period>`.
+-- The site count comes free from Q5's row count.
 select count(*) as practicas
 from (select distinct practice_id
       from <schema>.reportings
@@ -163,8 +176,10 @@ its own statement.
 ```sql
 -- Q7. How much of the period's billing has a loaded cost composition
 -- (decides the wording of conclusion 5 — never omit this check).
-select round((100.0 * sum(r.billed_amount) filter (where c.practice_id is not null)
-              / nullif(sum(r.billed_amount), 0))::numeric, 1) as pct_con_costo
+select round((100.0 * sum(r.billed_amount + coalesce(r.counter_amount, 0))
+                       filter (where c.practice_id is not null)
+              / nullif(sum(r.billed_amount + coalesce(r.counter_amount, 0)), 0))::numeric, 1)
+         as pct_con_costo
 from <schema>.reportings r
 left join (select distinct practice_id from <schema>.relation) c
        on c.practice_id = r.practice_id::text
@@ -174,7 +189,9 @@ where r.period >= DATE '2026-01-01' and r.period < DATE '2026-07-01';
 Notes that decide correctness:
 
 - `reportings.os` and `headquarter` are **unreconciled labels**, not foreign
-  keys — never join them to the `os` / `headquarters` catalogs.
+  keys — never join them to the `os` / `headquarters` catalogs. Insurers come
+  from `report_os` (Q4), whose total does NOT add up to the period total
+  (derivantes, particulares and unloaded insurers are left out).
 - Do not compute realized margin from `relation` unless Q7 returns **≥ 60 %**.
   Below that the cross is not representative; the report says so in conclusion 5
   instead of showing a margin number.

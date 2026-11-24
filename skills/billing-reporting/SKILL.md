@@ -29,8 +29,9 @@ to Cost Composition and Pricing to compute realized margins.
   Scale: very large (hundreds of thousands to millions; ≈1.77M in reference
   schema). Key columns: `period` (date) — reporting month; `practice_id`
   (bigint, joins `pricing.code`); `practice_name` (text); `quantity` (bigint) —
-  units performed; `billed_amount` (double) — amount billed;
-  `counter_amount` (double) — a paired/counter amount; `is_derivation`
+  units performed; `billed_amount` (double) — amount billed to the insurer;
+  `counter_amount` (double, nullable) — amount collected at the counter
+  (ventanilla); `is_derivation`
   (boolean) — whether the row is a derivation; `headquarter` (varchar) — branch
   name/label; `os` (varchar) / `os_id` (bigint) — insurer reference (free text /
   id; see gotchas); `job_id` (uuid, joins `jobs.id`); `created_at`,
@@ -50,17 +51,32 @@ Implicit joins; cast keys to `text` when types differ.
 ## Key concepts & terminology
 - **`period`** = the month the activity belongs to (a date, typically the first
   of the month).
-- **`quantity`** = number of practices performed; **`billed_amount`** = revenue
-  billed; **`counter_amount`** = a paired amount (e.g. counter-value / expected).
-- **`is_derivation`** = the row is a derivation (referral). Split reporting by
-  this flag when derivations must be treated separately.
+- **`quantity`** = number of practices performed; **`billed_amount`** = amount
+  billed to the insurer; **`counter_amount`** = amount collected at the counter
+  (ventanilla, copays/particulares); may be NULL.
+- **Facturación (billing / revenue / "cuánto se facturó") — MANDATORY rule:**
+  always `billed_amount + COALESCE(counter_amount, 0)`. Never `billed_amount`
+  alone: that leaves out the counter and does not match the platform's
+  informes.
+- **Derivation — MANDATORY rule (same as the platform's Derivaciones section):**
+  a row is a derivation when
+  `COALESCE(is_derivation, false) OR headquarter = 'Derivantes'`. Do not use
+  `is_derivation` alone.
+- **Default presentation:** billing totals INCLUDE derivations; when it helps,
+  show own work and derivations as a separate breakdown (propio / derivado).
+- **Insurers (obras sociales) ranking:** read from the materialized view
+  `report_os` (only insurers loaded in the `os` catalog, official name, amount
+  `total_amount` = billed + counter). Group by `os_code`. Its total does NOT
+  add up to the total billing (derivantes, particulares and unloaded insurers
+  are left out); compute shares over the insurers' total.
 - **`headquarter`** = the branch/site, stored as a label on the row.
 
 ## Metrics & calculations
-- **Billed revenue by period**: `sum(billed_amount)` grouped by `period`.
+- **Billed revenue by period**: `sum(billed_amount + coalesce(counter_amount, 0))`
+  grouped by `period`.
 - **Volume by practice**: `sum(quantity)` grouped by `practice_id`.
-- **Derivation share**: `sum(billed_amount)` / counts grouped by
-  `is_derivation`.
+- **Derivation share**: billing (formula above) / counts grouped by the
+  derivation rule above.
 - **Realized margin** (combine with cost): billed revenue minus
   `quantity * unit_cost`, where `unit_cost` comes from `relation`
   (`sum(cost*incidence)` per practice).
@@ -74,10 +90,9 @@ Implicit joins; cast keys to `text` when types differ.
   reconcile to the `headquarters` / `os` catalogs (see gotchas).
 
 ## Ambiguities & gotchas
-- **`reportings.os_id` / `reportings.os` did not join to the `os` catalog** in
-  the data checked (neither `os_id → os.general_os_id` nor `os → os.code`
-  matched). Treat the insurer on a reporting row as an unreconciled
-  label/id unless verified for the specific tenant.
+- **`reportings.os` is free text** (mixes insurers with derivantes, external
+  labs and particulares). Do not rank or count insurers from it: use
+  `report_os` (see the insurers rule above).
 - `reportings.headquarter` is a `varchar` label, not a foreign key to
   `headquarters.id`; `headquarters` is empty in the reference schema.
 - `quantity` is `bigint` in the base table but views may expose it as `numeric`.
@@ -92,7 +107,7 @@ Implicit joins; cast keys to `text` when types differ.
 ```sql
 -- Q: Billed revenue and volume by period (last 12 periods).
 select period, count(*) as rows, sum(quantity) as qty,
-       round(sum(billed_amount)::numeric, 2) as billed
+       round(sum(billed_amount + coalesce(counter_amount, 0))::numeric, 2) as billed
 from <schema>.reportings
 group by period
 order by period desc
@@ -102,7 +117,7 @@ limit 12;
 ```sql
 -- Q: Top practices by total billed amount.
 select practice_id, practice_name,
-       round(sum(billed_amount)::numeric, 2) as billed,
+       round(sum(billed_amount + coalesce(counter_amount, 0))::numeric, 2) as billed,
        sum(quantity) as qty
 from <schema>.reportings
 group by practice_id, practice_name
@@ -112,10 +127,22 @@ limit 10;
 
 ```sql
 -- Q: How much of billing is derivations vs own work?
-select is_derivation, count(*) as rows,
-       round(sum(billed_amount)::numeric, 2) as billed
+select (coalesce(is_derivation, false) or headquarter = 'Derivantes') as derivado,
+       count(*) as rows,
+       round(sum(billed_amount + coalesce(counter_amount, 0))::numeric, 2) as billed
 from <schema>.reportings
-group by is_derivation;
+group by 1;
+```
+
+```sql
+-- Q: Top insurers (obras sociales) by billing in a period.
+select max(os) as obra_social, sum(quantity) as qty,
+       round(sum(total_amount)::numeric, 2) as billed
+from <schema>.report_os
+where period >= DATE '2026-09-01' and period < DATE '2026-10-01'
+group by os_code
+order by billed desc
+limit 10;
 ```
 
 ```sql
